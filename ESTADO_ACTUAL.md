@@ -1,0 +1,40 @@
+# Estado de la aplicación — 23 de octubre de 2026
+
+Estado: versión comprobada en uso por Luis. Desarrollo cerrado por ahora; se retomará cuando aparezca un fallo concreto. No se inicia una nueva ronda de rediseño ni de funciones.
+
+## Punto de entrada y flujo conservado
+
+`Sputtering Design Tools.pyw` y `sputtering_design_tools.py` abren el editor de PCB y serigrafías. El frontal Eurorack es una ventana adicional del mismo proyecto; `--panel` permite abrirla directamente. Los accesos directos existentes siguen apuntando a la misma aplicación.
+
+Se mantienen las capas Gerber, importación de imágenes, recetas de composición, alineación y transformación manual, elección de destinos, generación de capas y exportación. Los drills Excellon son referencias independientes y conservan su escala y posición.
+
+## Correcciones entregadas
+
+- Editor de conversión estable, vistas ampliadas, controles numéricos con coma decimal, pasos finos y botones de restablecimiento.
+- Algoritmos con la misma polaridad. Blanco significa tinta sobre placa negra. Las opciones claros/oscuros distinguen fotografía positiva y negativa; Aplicar a PCB y exportación comparte los ajustes entre vista y archivo.
+- Casillas de exportación visibles y preferencias de selección, receta y holgura recordadas durante la sesión.
+- Paquete completo y ZIP numerado automáticos, sin sobrescribir el original. Se conservan las capas no editadas, taladros y parámetros; el manifiesto incluye SHA-256 y los ajustes aplicados.
+- Recorte automático de la imagen por el contorno PCB en vista general, previsualización de exportación y Gerber, respetando la posición, escala y giro manuales. El marco completo permanece disponible para moverla. No se vuelve a centrar al exportar.
+
+El recorte afecta al borde de la placa. No incorpora separación automática respecto a pads. Un contorno detectado debe estar cerrado; sin contorno cargado se mantiene la exportación libre. El lector conserva las limitaciones de formatos descritas en la guía.
+
+## Validación del cierre
+
+- 48 pruebas locales pasan en Python 3.12 con Tkinter, Pillow y NumPy. Incluyen el flujo original, conversión, polaridad, exportación, drills, frontal, colocación manual y recorte de contornos cóncavos/con vaciados.
+- Comprobación independiente de la exportación real con Gerbonara 1.6.3: 24.508 trazos de imagen conservados y recorte de los extremos físicos del trazo. Resultado: 0 mm² de tinta fuera del contorno y 0 mm² borrados dentro.
+- La copia recortada `WAVEDISTEQ_3_testrouted_fab_v003_edit_v002.zip` conserva posición y escala. Cobre, máscaras, contorno, serigrafía superior y los 313 taladros permanecen idénticos al paquete anterior. CRC y SHA-256 comprobados; original intacto.
+- Luis confirma que la aplicación funciona correctamente y solicita dejarla en mantenimiento.
+
+Las placas, imágenes y exportaciones reales permanecen en el proyecto local; no son necesarias para ejecutar las pruebas sintéticas del repositorio. Gerbonara se utilizó para la comprobación independiente y no es una dependencia de ejecución de la app. Este cierre valida el editor y su exportación; no sustituye el DRC eléctrico ni la aprobación de fabricación del diseño.
+
+## Cómo retomar un fallo
+
+Registrar qué acción lo provoca, resultado esperado/obtenido y una referencia o captura si existe. Reproducirlo sobre esta versión, corregirlo en un cambio acotado y conservar la estética y el flujo actuales.
+
+Desde la carpeta de la aplicación:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Las pruebas de interfaz requieren una sesión con Tkinter funcional. Después de modificar código, reiniciar la aplicación desde su acceso habitual. Los avisos CAM del diseño y el encaje mecánico del frontal se revisan por separado cuando se trabaje con una placa concreta.
