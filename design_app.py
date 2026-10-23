@@ -1,5 +1,6 @@
 """Additive integration: the original silkscreen UI is the main application."""
 import copy
+import json
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -14,6 +15,7 @@ class DesignToolsApp(GerberEditor):
         self.panel_window = None
         self.panel_seed = None
         self.panel_project = project
+        self.fabrication_source = None
         self.zoom = 1.0
         super().__init__()
         self.geometry('1200x750')
@@ -28,6 +30,12 @@ class DesignToolsApp(GerberEditor):
         if project:
             self.panel_seed = PanelDocument.load(project)
             self.add_references(self.panel_seed.layers)
+            provenance = Path(project).with_name('REFERENCIAS_ACTUALES.json')
+            if provenance.exists():
+                source = json.loads(provenance.read_text(encoding='utf-8')).get('source_zip')
+                if source:
+                    source = Path(source)
+                    self.fabrication_source = source if source.is_absolute() else provenance.parent/source
         if paths:
             self.load_paths(paths)
 
@@ -46,6 +54,8 @@ class DesignToolsApp(GerberEditor):
     def load_paths(self, paths):
         refs, errors = load_references(paths)
         self.add_references(refs)
+        if not errors and len(paths) == 1 and Path(paths[0]).suffix.lower() == '.zip':
+            self.fabrication_source = Path(paths[0])
         if errors:
             messagebox.showwarning('Carga de referencias', '\n'.join(errors[:8]), parent=self)
 
@@ -138,6 +148,7 @@ class DesignToolsApp(GerberEditor):
         self._draw_drills()
 
     def clear_layers(self):
+        self.fabrication_source = None
         self.drill_references.clear()
         super().clear_layers()
 
