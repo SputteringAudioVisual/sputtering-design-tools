@@ -155,8 +155,10 @@ def load_references(paths):
                             fmt = None
                             if Path(member.filename).suffix.lower() in DRILL_EXTENSIONS:
                                 params_name = str(Path(member.filename).with_name('nc_param.txt')).replace('\\', '/')
-                                if params_name in archive.namelist():
-                                    fmt = parameter_format(archive.read(params_name).decode('utf-8-sig'))
+                                for candidate in (params_name, 'parametros/nc_param.txt'):
+                                    if candidate in archive.namelist():
+                                        fmt = parameter_format(archive.read(candidate).decode('utf-8-sig'))
+                                        break
                             references.append(Reference(member.filename, archive.read(member).decode('utf-8-sig'), coord_format=fmt))
                         except (ValueError, UnicodeError) as error:
                             errors.append(str(error))
