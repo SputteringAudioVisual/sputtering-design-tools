@@ -1,6 +1,6 @@
 # Ruta única de utilidades Allegro
 
-Versión **0.2.1**. Esta es la referencia de carga para todos los proyectos y chats.
+Versión **0.2.2**. Esta es la referencia de carga para todos los proyectos y chats.
 
 Instalación compartida:
 
@@ -17,8 +17,10 @@ skill load("C:/SPB_Data/pcbenv/pcb_tools/pcb_cargar.il")
 Al abrir Allegro de nuevo, la carga es automática. Para confirmar qué versión está activa:
 
 ```text
-pcb_utilidades_info
+pcb_info
 ```
+
+`pcb_utilidades_info` permanece como sinónimo. El informe de versión utiliza la salida directa de la consola de Allegro, sin el búfer de `printf`.
 
 Los nombres cortos ejecutan las llamadas directas `skill ...()` mediante alias de Allegro. La carga elimina los registros anteriores de estas utilidades y comprueba cada alias, de modo que recargar la sesión no conserva accesos antiguos.
 

@@ -18,7 +18,7 @@ Al reiniciar Allegro, los comandos se cargan automáticamente. Para cargar o act
 skill load("C:/SPB_Data/pcbenv/pcb_tools/pcb_cargar.il")
 ```
 
-El comando `pcb_utilidades_info` muestra la versión y la carpeta activa. Usa siempre el cargador estándar, sin tildes ni `ñ`; las carpetas de pruebas y las copias de desarrollo no son instalaciones para trabajar. Al cargar solo se registran comandos: no se modifica la placa automáticamente.
+El comando `pcb_info` muestra la versión y la carpeta activa; `pcb_utilidades_info` sigue disponible como sinónimo. El informe usa la salida directa de la consola de Allegro. Usa siempre el cargador estándar, sin tildes ni `ñ`; las carpetas de pruebas y las copias de desarrollo no son instalaciones para trabajar. Al cargar solo se registran comandos: no se modifica la placa automáticamente.
 
 Desde 0.2.1, los nombres de la tabla siguiente son alias nativos que llaman a `skill funcion()`, la misma entrada que las llamadas directas. La carga retira los antiguos registros `axlCmdRegister` de estas utilidades y verifica los alias. Esto evita depender de esos callbacks en sesiones donde algunos nombres no mostraban resultado aunque las llamadas directas sí funcionaban. La ruta y las operaciones sobre la placa son las mismas.
 
@@ -37,7 +37,7 @@ Para personalizar una placa, copia `config_ejemplo.il`, ajusta sus valores y cá
 | `pcb_fab_auditar` | Comprueba si existen las capas necesarias y si la estructura es compatible con este exportador. |
 | `pcb_fab_configurar` | Crea o reemplaza los siete films de fabricación descritos abajo. |
 | `pcb_fab_exportar` | Genera Gerber, NC Drill y un ZIP con versión dentro del proyecto. |
-| `pcb_utilidades_info` | Muestra la versión y la ruta única que se está utilizando. |
+| `pcb_info` | Muestra la versión y la ruta única que se está utilizando. |
 
 Comienza por la auditoría correspondiente. Los cambios de textos, máscara, reglas y films quedan **en memoria**: revisa y guarda la placa en Allegro. No se añaden pistas, vías ni conexiones de tierra. Guarda una copia antes de usar estas herramientas en otro diseño.
 

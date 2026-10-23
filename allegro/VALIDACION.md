@@ -1,5 +1,11 @@
 # Validación
 
+## Versión 0.2.2: información directa en consola
+
+El usuario confirmó que `pcb_mascara_revisar` ya responde con 0.2.1, pero `pcb_utilidades_info` seguía sin mostrar salida en su sesión. La información utiliza ahora `axlUIWPrint(nil ...)`, que escribe directamente en la ventana principal sin depender del búfer de `printf`. Se incorpora el alias `pcb_info` y se conserva `pcb_utilidades_info`.
+
+La prueba nativa en Allegro 17.2 P028 ejecutó ambos nombres desde el intérprete y comprobó sus alias, la versión y la función directa: **`INFO_ALIASES_PASS 0.2.2`**. Los tres mensajes informativos aparecen completos en la salida del proceso para ambas llamadas. La prueba no modifica la placa. Falta confirmar el resultado visual en la sesión del usuario; el silencio original no se ha reproducido sin interfaz gráfica.
+
 ## Versión 0.2.1: ejecución de los nombres cortos
 
 En una sesión gráfica del usuario, las llamadas directas `skill pcbMaskApply()`, `skill pcbMaskAudit()`, `skill pcbAplicarAnchos()` y `skill pcbAnchosAuditar()` respondieron, mientras que algunos accesos registrados no mostraban salida. Una prueba sin interfaz gráfica con los registros antiguos sí ejecutó todos los nombres; por tanto, no se reprodujo allí el silencio de esa sesión.

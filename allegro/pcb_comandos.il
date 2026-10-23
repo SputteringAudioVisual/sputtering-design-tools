@@ -3,6 +3,7 @@
 procedure(pcbInstalarComandos()
   prog((nombre llamada intentos)
     foreach(entrada '(
+      ("pcb_info" "pcbUtilidadesInfo")
       ("pcb_utilidades_info" "pcbUtilidadesInfo")
       ("pcb_textos_auditar" "pcbSilkAuditar")
       ("pcb_textos" "pcbSilkAplicar")

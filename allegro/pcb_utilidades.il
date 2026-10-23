@@ -3,7 +3,7 @@ procedure(pcbCargar(carpeta)
   prog((resultado)
     pcbToolsRoot = if(rexMatchp("^[A-Za-z]:/" carpeta) || rexMatchp("^/" carpeta)
       then carpeta else strcat(getWorkingDir() "/" carpeta))
-    pcbToolsVersion = "0.2.1"
+    pcbToolsVersion = "0.2.2"
     load(strcat(pcbToolsRoot "/pcb_config.il"))
     load(strcat(pcbToolsRoot "/pcb_proyecto.il"))
     when(isFile(strcat(pcbToolsRoot "/pcb_local.il"))
@@ -20,8 +20,9 @@ procedure(pcbCargar(carpeta)
 )
 
 procedure(pcbUtilidadesInfo()
-  printf("PCB: utilidades %s cargadas desde %s\n" pcbToolsVersion pcbToolsRoot)
-  printf("PCB: comandos pcb_textos / pcb_mascara / pcb_anchos / pcb_fab_exportar.\n")
-  printf("PCB: primero usa sus auditorias. Cargar no modifica la placa.\n")
+  ; GUI output must not depend on printf's buffered output port.
+  axlUIWPrint(nil "PCB: utilidades %s cargadas desde %s" pcbToolsVersion pcbToolsRoot)
+  axlUIWPrint(nil "PCB: comandos pcb_textos / pcb_mascara / pcb_anchos / pcb_fab_exportar.")
+  axlUIWPrint(nil "PCB: primero usa sus auditorias. Cargar no modifica la placa.")
   t
 )
