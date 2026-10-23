@@ -2,6 +2,7 @@
 from pathlib import Path
 import sys
 import tempfile
+import time
 import tkinter as tk
 import unittest
 from unittest.mock import patch
@@ -106,6 +107,68 @@ class OriginalWorkflowTests(unittest.TestCase):
         self.app.drill_references[0].variable.set(False)
         self.app._redraw()
         self.assertFalse(self.app.canvas.find_withtag('drill_reference'))
+
+    def pump_events(self, seconds):
+        until = time.monotonic() + seconds
+        while time.monotonic() < until:
+            self.app.update()
+            time.sleep(.01)
+
+    def test_conversion_preview_settles_after_controls_and_resize(self):
+        from PIL import Image
+        self.app.overlay_image = Image.linear_gradient('L').resize((700, 500)).convert('RGB')
+        self.app.overlay_w_mm, self.app.overlay_h_mm = 70, 50
+        self.app._open_conversion_editor()
+        win = self.app._conv_editor
+        errors = []
+        self.app.report_callback_exception = lambda *args: errors.append(args)
+
+        def snapshot():
+            return [(str(w.cget('image')), w.winfo_geometry()) for w in self.walk(win)
+                    if isinstance(w, tk.Label) and w.cget('image')]
+
+        def assert_settled():
+            self.pump_events(1.0)
+            previous = snapshot()
+            self.assertEqual(len(previous), 2)
+            self.pump_events(.6)
+            self.assertEqual(snapshot(), previous, 'Preview keeps repainting while idle')
+            self.assertFalse(any('vista rápida' in w.cget('text') for w in self.walk(win)
+                                 if isinstance(w, tk.Label)))
+            return previous
+
+        initial = assert_settled()
+        threshold = next(w for w in self.walk(win) if isinstance(w, tk.Scale)
+                         and float(w.cget('to')) == 255)
+        threshold.set(185)
+        changed = assert_settled()
+        self.assertNotEqual(initial[0][0], changed[0][0])
+        win.geometry('1000x700')
+        resized = assert_settled()
+        self.assertNotEqual(changed[0][1], resized[0][1])
+        for radio in (w for w in self.walk(win) if isinstance(w, tk.Radiobutton)):
+            radio.invoke()
+            self.pump_events(.02)
+        assert_settled()
+        self.assertFalse(errors)
+
+    def test_conversion_close_cancels_pending_preview(self):
+        from PIL import Image
+        self.app.overlay_image = Image.new('RGB', (40, 30), 'gray')
+        self.app.overlay_w_mm, self.app.overlay_h_mm = 4, 3
+        self.app._open_conversion_editor()
+        self.pump_events(.08)
+        win = self.app._conv_editor
+        errors = []
+        self.app.report_callback_exception = lambda *args: errors.append(args)
+        win.destroy()
+        self.pump_events(.5)
+        self.assertIsNone(self.app._conv_refresh_id)
+        self.assertIsNone(self.app._conv_quality_id)
+        self.assertFalse(errors)
+        self.app._open_conversion_editor()
+        self.pump_events(.6)
+        self.assertTrue(self.app._conv_editor.winfo_exists())
 
     def test_front_panel_does_not_reset_logo_or_main_window(self):
         with tempfile.TemporaryDirectory() as folder:
