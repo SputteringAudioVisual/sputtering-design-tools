@@ -1912,6 +1912,8 @@ class GerberEditor(tk.Tk):
         sidebar = tk.Frame(win, bg="#252535", width=sidebar_width)
         sidebar.pack(side="left", fill="y", padx=10, pady=10)
         sidebar.pack_propagate(False)
+        actions = tk.Frame(sidebar, bg="#252535")
+        actions.pack(side="bottom", fill="x")
         scroller = tk.Canvas(sidebar, bg="#252535", highlightthickness=0)
         scrollbar = ttk.Scrollbar(sidebar, orient="vertical", command=scroller.yview)
         scrollbar.pack(side="right", fill="y")
@@ -1937,6 +1939,87 @@ class GerberEditor(tk.Tk):
         def sep():
             tk.Frame(left, bg="#444466", height=1).pack(fill="x", pady=4)
 
+        value_hint = "Enter confirma · Se admite coma decimal"
+        value_status = tk.StringVar(win, value=value_hint)
+        numeric_controls = []
+
+        def numeric_control(variable, minimum, maximum, step, default, name, title):
+            # El texto en edición se mantiene separado del valor numérico válido.
+            # Borrar un campo o escribir una coma nunca rompe el render/exportación.
+            row = tk.Frame(left, bg="#252535", name=name+"_control")
+            row.pack(fill="x", pady=(2, 0))
+            row.grid_columnconfigure(1, weight=1)
+            text = tk.StringVar(win)
+            def sync_text(*_):
+                value = variable.get()
+                text.set(str(int(value)) if step == 1 else f"{value:.2f}".replace('.', ','))
+            sync_text()
+            variable.trace_add('write', sync_text)
+
+            entry = tk.Entry(row, textvariable=text, name="value", width=7,
+                             justify="center", bg="#1a1a2e", fg="white",
+                             insertbackground="white", font=control_font)
+            entry.grid(row=0, column=1, sticky="ew", padx=4)
+
+            def commit(event=None, revert=False):
+                try:
+                    value = float(text.get().strip().replace(',', '.'))
+                    if not math.isfinite(value): raise ValueError()
+                except ValueError:
+                    if revert:
+                        sync_text()
+                        entry.configure(bg="#1a1a2e")
+                        value_status.set(value_hint)
+                    else:
+                        entry.configure(bg="#71353b")
+                        value_status.set(f"{title}: introduce un número válido")
+                        entry.focus_set()
+                    return False
+                value = max(minimum, min(maximum, value))
+                value = int(round(value)) if step == 1 else round(value, 2)
+                changed = value != variable.get()
+                variable.set(value)
+                sync_text()
+                entry.configure(bg="#1a1a2e")
+                value_status.set(value_hint)
+                if changed: refresh(fast=False)
+                return True
+
+            def nudge(direction):
+                # Confirmar un número escrito antes de hacer el ajuste fino.
+                if not commit(): return "break"
+                text.set(str(variable.get() + direction*step))
+                commit()
+                return "break"
+
+            def reset():
+                text.set(str(default))
+                commit()
+
+            buttons = []
+            for column, caption, command in ((0, "−", lambda: nudge(-1)),
+                                              (2, "+", lambda: nudge(1)),
+                                              (3, "Restablecer", reset)):
+                button = tk.Button(row, text=caption, command=command,
+                                   bg="#3a3a5c", fg="white", relief="flat",
+                                   font=("Segoe UI", 10), padx=6,
+                                   repeatdelay=350, repeatinterval=80)
+                button.grid(row=0, column=column)
+                buttons.append(button)
+            entry.bind("<Return>", lambda e: (commit(), "break")[1])
+            entry.bind("<FocusOut>", lambda e: commit(revert=True))
+            entry.bind("<Up>", lambda e: nudge(1))
+            entry.bind("<Down>", lambda e: nudge(-1))
+            scale = tk.Scale(left, variable=variable, from_=minimum, to=maximum,
+                             resolution=step, orient="horizontal", showvalue=False,
+                             bg="#252535", fg="white", troughcolor="#1a1a2e",
+                             font=control_font, highlightthickness=0,
+                             command=lambda v: refresh(fast=True))
+            scale.pack(fill="x")
+            control = {'commit': commit, 'entry': entry, 'widgets': [entry, scale, *buttons]}
+            numeric_controls.append(control)
+            return control
+
         # Algoritmo
         lbl("Algoritmo de conversión")
         algo_var = tk.StringVar(value=getattr(self, '_conv_algo', 'threshold'))
@@ -1953,16 +2036,17 @@ class GerberEditor(tk.Tk):
             tk.Radiobutton(left, text=txt, variable=algo_var, value=val,
                            bg="#252535", fg="#ddddee", selectcolor="#1a1a2e",
                            activebackground="#252535", font=control_font,
-                           anchor="w", command=lambda: refresh(fast=True)
+                           anchor="w", command=lambda: algorithm_changed()
                            ).pack(fill="x", padx=4)
 
         sep()
-        lbl("Umbral (para umbral simple)")
+        lbl("Umbral (0–255)")
         thresh_var = tk.IntVar(value=self.overlay_threshold.get())
-        tk.Scale(left, variable=thresh_var, from_=0, to=255, orient="horizontal",
-                 bg="#252535", fg="white", troughcolor="#1a1a2e",
-                 font=control_font, highlightthickness=0, command=lambda v: refresh(fast=True)
-                 ).pack(fill="x")
+        threshold_control = numeric_control(thresh_var, 0, 255, 1, 128, 'threshold', 'Umbral')
+        threshold_hint = tk.Label(left, bg="#252535", fg="#88aacc", height=2,
+                                  font=("Segoe UI", 9), wraplength=sidebar_width-35,
+                                  justify="left", anchor="w")
+        threshold_hint.pack(fill="x")
 
         sep()
         # Tamaño real de la imagen en la PCB
@@ -1987,21 +2071,23 @@ class GerberEditor(tk.Tk):
             return f"{c}×{r} px"
 
         pxsize_var = tk.DoubleVar(value=min(max(min_px, getattr(self, '_conv_pxsize', float(self.entry_dot.get()))), max_px))
-        px_scale = tk.Scale(left, variable=pxsize_var, from_=min_px, to=max_px,
-                            resolution=0.01, orient="horizontal",
-                            bg="#252535", fg="white", troughcolor="#1a1a2e",
-                            font=control_font, highlightthickness=0, command=lambda v: refresh(fast=True))
-        px_scale.pack(fill="x")
+        numeric_control(pxsize_var, min_px, max_px, .01, min_px, 'pixel', 'Píxel')
         px_info = tk.Label(left, text="", height=2, bg="#252535", fg="#ffcc44", font=("Segoe UI", 10))
         px_info.pack()
 
         sep()
-        lbl("Contraste / Gamma")
+        lbl("Contraste (1,00 = original)")
         contrast_var = tk.DoubleVar(value=getattr(self, '_conv_contrast', 1.0))
-        tk.Scale(left, variable=contrast_var, from_=0.3, to=3.0, resolution=0.05,
-                 orient="horizontal", bg="#252535", fg="white", troughcolor="#1a1a2e",
-                 font=control_font, highlightthickness=0, command=lambda v: refresh(fast=True)
-                 ).pack(fill="x")
+        numeric_control(contrast_var, .3, 3.0, .01, 1.0, 'contrast', 'Contraste')
+
+        def algorithm_changed(render=True):
+            bayer = algo_var.get() in ('bayer4', 'bayer8')
+            for widget in threshold_control['widgets']:
+                widget.configure(state='disabled' if bayer else 'normal')
+            threshold_hint.configure(text="Bayer usa una trama fija. Ajusta contraste y píxel."
+                                     if bayer else "Un umbral mayor añade tinta; uno menor la reduce.")
+            if render: refresh(fast=True)
+        algorithm_changed(render=False)
 
         sep()
         lbl("Inversión de imagen")
@@ -2012,8 +2098,13 @@ class GerberEditor(tk.Tk):
                        command=lambda: refresh(fast=False)).pack(anchor="w")
 
         sep()
+        tk.Label(actions, textvariable=value_status, bg="#252535", fg="#ffcc44",
+                 font=("Segoe UI", 9), height=2, wraplength=sidebar_width-35,
+                 justify="left").pack(fill="x")
         # Botón aplicar: transfiere los parámetros a la ventana principal
         def apply_to_main():
+            for control in numeric_controls:
+                if not control['commit'](): return
             self.overlay_threshold.set(thresh_var.get())
             # El trazo de exportación siempre es 0.15mm (JLCPCB)
             self.entry_dot.delete(0, "end")
@@ -2029,10 +2120,10 @@ class GerberEditor(tk.Tk):
                 f"Dithering: píxel {pxsize_var.get():.2f}mm · {algo_var.get()}\n"
                 f"Contraste: {contrast_var.get():.2f}", parent=win)
 
-        tk.Button(left, text="✅ Aplicar a exportación", command=apply_to_main,
+        tk.Button(actions, text="✅ Aplicar a exportación", command=apply_to_main,
                   bg="#2244aa", fg="white", relief="flat",
                   font=("Segoe UI", 11, "bold"), pady=6).pack(fill="x", pady=(8,2))
-        tk.Button(left, text="Cerrar", command=win.destroy,
+        tk.Button(actions, text="Cerrar", command=win.destroy,
                   bg="#3a3a5c", fg="white", relief="flat",
                   font=control_font, pady=4).pack(fill="x")
 
@@ -2142,14 +2233,14 @@ class GerberEditor(tk.Tk):
             thresh = thresh_var.get()
 
             # Una sola convención de polaridad en preview y exportación.
-            ink = _raster_ink_mask(arr, 'threshold' if fast else algo, thresh)
+            ink = _raster_ink_mask(arr, algo, thresh)
             res_img = PILImg.fromarray(np.where(ink, 0, 255).astype(np.uint8)).convert("RGB")
 
             # Ajustar ambas vistas al espacio disponible, incluso ampliando.
             # El zoom visual no cambia las medidas físicas ni la resolución Gerber.
             scale = min(PW / w_mm_r, PH / h_mm_r)
             display_size = (max(1, int(w_mm_r * scale)), max(1, int(h_mm_r * scale)))
-            orig_disp = img_enh.convert("RGB").resize(display_size, PILImg.LANCZOS)
+            orig_disp = img.convert("RGB").resize(display_size, PILImg.LANCZOS)
             res_img = res_img.resize(display_size, PILImg.NEAREST)
 
             from PIL import ImageTk as PILImageTk
