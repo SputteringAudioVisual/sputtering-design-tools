@@ -2283,68 +2283,107 @@ class GerberEditor(tk.Tk):
         if not self.gerber_layers:
             messagebox.showwarning("Aviso", "Primero carga al menos una capa Gerber.")
             return
-
-        # Construir la lista unificada de items exportables (todas las capas + targets nuevos)
-        items = self._build_export_items()
-        choices = self._choose_export_dialog(items)
+        choices = self._choose_export_dialog(self._build_export_items())
         if not choices:
             return
-
-        out_dir = filedialog.askdirectory(title="Carpeta donde guardar las capas exportadas")
-        if not out_dir:
+        source = getattr(self, 'fabrication_source', None)
+        destination = Path(source).parent if source else filedialog.askdirectory(
+            title="Carpeta donde crear el nuevo paquete Gerber y ZIP")
+        if not destination:
             return
-
-        thresh = self.overlay_threshold.get()
-
-        results = []
         try:
-            for ch in choices:
-                item = ch["item"]
-                mode = ch["mode"]
-                clr = ch.get("clearance", 0.5)   # holgura específica de esta capa
-                tag = item["tag"]
-                ext = item["ext"]
-                out_path = str(Path(out_dir) / f"{tag}{ext}")
+            from fabrication_export import FabricationExport
+            baseline = {}
+            def add_original(name, content):
+                name = Path(name).name
+                data = content.encode('utf-8')
+                if name in baseline and baseline[name] != data:
+                    raise ValueError(f"Hay dos capas diferentes con el mismo nombre: {name}")
+                baseline[name] = data
+            for entry in self.gerber_layers:
+                add_original(entry['name'], ''.join(entry['layer'].raw_lines))
+            drill_formats = {}
+            for ref in getattr(self, 'drill_references', []):
+                add_original(ref.name, ref.content)
+                drill_formats[Path(ref.name).name] = list(ref.coord_format)
+            if not source and drill_formats:
+                formats = set(tuple(value) for value in drill_formats.values())
+                if len(formats) == 1:
+                    integer, decimal = formats.pop()
+                    add_original('nc_param.txt', f'INTEGER-PLACES {integer}\nDECIMAL-PLACES {decimal}\n')
+            changes, results = [], []
+            with FabricationExport(destination, baseline, source) as package:
+                for choice in choices:
+                    item = choice['item']
+                    name = f"{item['tag']}{item['ext']}"
+                    output = package.path_for(name)
+                    results.append(self._write_export_layer(choice, str(output), self.overlay_threshold.get()))
+                    changes.append({'file': output.relative_to(package.work).as_posix(),
+                                    'mode': choice['mode'], 'clearance_mm': choice.get('clearance', .5)})
+                settings = {'algorithm': getattr(self, '_conv_algo', 'threshold'),
+                            'threshold': self.overlay_threshold.get(),
+                            'contrast': getattr(self, '_conv_contrast', 1.0),
+                            'invert': getattr(self, '_conv_invert', False),
+                            'pixel_mm': getattr(self, '_conv_pxsize', .15),
+                            'x_mm': self.overlay_x_mm, 'y_mm': self.overlay_y_mm,
+                            'width_mm': self.overlay_w_mm, 'height_mm': self.overlay_h_mm,
+                            'angle_deg': self.overlay_angle_deg}
+                folder, archive = package.finish(changes, settings, drill_formats)
+            self.last_export_zip, self.last_export_folder = archive, folder
+            messagebox.showinfo("Exportado", "✅ Paquete y ZIP nuevos:\n\n" + str(archive)
+                                + "\n\n" + "\n".join(results), parent=self)
+            return archive
+        except Exception as error:
+            messagebox.showerror("Error de exportación", str(error), parent=self)
 
-                if mode == "base":
-                    # Exportar la capa cargada tal cual (sin logo)
-                    item["base_entry"]["layer"].export_with_overlay([], out_path)
-                    results.append(f"• {Path(out_path).name}  (solo base)")
+    def _write_export_layer(self, ch, out_path, thresh):
+        results = []
+        if ch['mode'] != 'base' and self.overlay_image is None:
+            raise ValueError('Importa una imagen antes de exportar una receta con logo.')
+        item = ch["item"]
+        mode = ch["mode"]
+        clr = ch.get("clearance", 0.5)   # holgura específica de esta capa
+        tag = item["tag"]
+        ext = item["ext"]
 
-                elif mode in ("merge", "clearance", "new", "under", "logo_windows"):
-                    if item["base_entry"] is not None:
-                        base_layer = item["base_entry"]["layer"]
-                    else:
-                        base = self._find_outline_layer() or self.gerber_layers[0]
-                        base_layer = base["layer"]
+        if mode == "base":
+            # Exportar la capa cargada tal cual (sin logo)
+            pass  # El paquete ya conserva los bytes de la capa original.
+            results.append(f"• {Path(out_path).name}  (solo base)")
 
-                    converter = ImageToGerber(base_layer)
-                    clearance = clr if mode == "clearance" else 0.0
-                    cmds = self._build_logo_cmds(converter, thresh, clearance)
+        elif mode in ("merge", "clearance", "new", "under", "logo_windows"):
+            if item["base_entry"] is not None:
+                base_layer = item["base_entry"]["layer"]
+            else:
+                base = self._find_outline_layer() or self.gerber_layers[0]
+                base_layer = base["layer"]
 
-                    if mode == "new" or item["base_entry"] is None:
-                        base_layer.export_new_layer(cmds, out_path, layer_name=tag)
-                        results.append(f"• {Path(out_path).name}  (nueva, solo logo)")
-                    elif mode == "clearance":
-                        base_layer.export_with_overlay(cmds, out_path, position="after")
-                        results.append(f"• {Path(out_path).name}  (logo con ventanas en base)")
-                    elif mode == "under":
-                        base_layer.export_with_overlay(cmds, out_path, position="before")
-                        results.append(f"• {Path(out_path).name}  (base encima del logo)")
-                    elif mode == "logo_windows":
-                        # Logo encima + base perfora el logo (clear ancho) + base redibujada
-                        clear_cmds = base_layer.emit_drawables(extra_mm=clr, polarity="C", dcode_start=200)
-                        redraw_cmds = base_layer.emit_drawables(extra_mm=0.0, polarity="D", dcode_start=300)
-                        combined = cmds + clear_cmds + redraw_cmds
-                        base_layer.export_with_overlay(combined, out_path, position="after")
-                        results.append(f"• {Path(out_path).name}  (logo con ventanas para la base)")
-                    else:  # merge
-                        base_layer.export_with_overlay(cmds, out_path, position="after")
-                        results.append(f"• {Path(out_path).name}  (logo encima de base)")
+            converter = ImageToGerber(base_layer)
+            clearance = clr if mode == "clearance" else 0.0
+            cmds = self._build_logo_cmds(converter, thresh, clearance)
 
-            messagebox.showinfo("Exportado", "✅ Capas exportadas:\n\n" + "\n".join(results))
-        except Exception as e:
-            messagebox.showerror("Error de exportación", str(e))
+            if mode == "new" or item["base_entry"] is None:
+                base_layer.export_new_layer(cmds, out_path, layer_name=tag)
+                results.append(f"• {Path(out_path).name}  (nueva, solo logo)")
+            elif mode == "clearance":
+                base_layer.export_with_overlay(cmds, out_path, position="after")
+                results.append(f"• {Path(out_path).name}  (logo con ventanas en base)")
+            elif mode == "under":
+                base_layer.export_with_overlay(cmds, out_path, position="before")
+                results.append(f"• {Path(out_path).name}  (base encima del logo)")
+            elif mode == "logo_windows":
+                # Logo encima + base perfora el logo (clear ancho) + base redibujada
+                clear_cmds = base_layer.emit_drawables(extra_mm=clr, polarity="C", dcode_start=200)
+                redraw_cmds = base_layer.emit_drawables(extra_mm=0.0, polarity="D", dcode_start=300)
+                combined = cmds + clear_cmds + redraw_cmds
+                base_layer.export_with_overlay(combined, out_path, position="after")
+                results.append(f"• {Path(out_path).name}  (logo con ventanas para la base)")
+            else:  # merge
+                base_layer.export_with_overlay(cmds, out_path, position="after")
+                results.append(f"• {Path(out_path).name}  (logo encima de base)")
+        if not results:
+            raise ValueError(f"Modo de exportación no reconocido: {ch['mode']}")
+        return results[0]
 
     def _preview_layer(self, item, mode, parent=None, clearance=None):
         """Renderiza una preview de cómo quedará la capa (base + logo según modo)."""
@@ -2615,6 +2654,9 @@ class GerberEditor(tk.Tk):
                            "Puedes cambiarlas por capa.",
                  bg="#252535", fg="#8888aa", font=("Segoe UI", 8)).pack(padx=14, anchor="w")
 
+        tk.Label(dlg, text="Se crea un ZIP nuevo. Sin marcar: se conserva la capa original.",
+                 bg="#252535", fg="#88aacc", font=("Segoe UI", 8)).pack(padx=14, anchor="w")
+
         canvas_box = tk.Frame(dlg, bg="#252535")
         canvas_box.pack(fill="both", expand=True, padx=14, pady=6)
 
@@ -2639,13 +2681,18 @@ class GerberEditor(tk.Tk):
             return ("merge", 0.5)
 
         rows = []
+        preferences = getattr(self, '_export_preferences', {})
+        def preference_key(item):
+            return (item['label'], item['tag'], item['ext'], item['is_new'])
         for item in items:
             row = tk.Frame(canvas_box, bg="#1e1e2e", pady=4)
             row.pack(fill="x", pady=2)
 
-            exp_var = tk.BooleanVar(value=item["has_logo"] or not item["is_new"])
-            tk.Checkbutton(row, variable=exp_var, bg="#1e1e2e", selectcolor="#0a0a1a",
-                           activebackground="#1e1e2e").pack(side="left")
+            saved = preferences.get(preference_key(item), {})
+            exp_var = tk.BooleanVar(master=dlg, value=saved.get('selected', item["has_logo"] or not item["is_new"]))
+            tk.Checkbutton(row, variable=exp_var, onvalue=True, offvalue=False,
+                           bg="#1e1e2e", fg="#ffffff", selectcolor="#2244aa",
+                           activeforeground="#ffffff", activebackground="#1e1e2e").pack(side="left")
 
             txt = item["label"]
             if item["is_new"]:
@@ -2654,6 +2701,8 @@ class GerberEditor(tk.Tk):
                      font=("Segoe UI", 9), width=24, anchor="w").pack(side="left")
 
             def_mode, def_clr = recipe_for_item(item)
+            def_mode = saved.get('mode', def_mode)
+            def_clr = saved.get('clearance', def_clr)
 
             # Modo
             if item["base_entry"] is not None and item["has_logo"]:
@@ -2709,14 +2758,20 @@ class GerberEditor(tk.Tk):
                 if not ev.get():
                     continue
                 try:
-                    clr = float(cv.get())
+                    clr = float(cv.get().replace(',', '.'))
+                    if not math.isfinite(clr) or clr < 0: raise ValueError()
                 except ValueError:
-                    clr = 0.5
+                    messagebox.showwarning("Holgura", "Introduce una holgura válida, mayor o igual a cero.", parent=dlg)
+                    return
                 sel.append({"item": it, "mode": mv.get(), "clearance": clr})
             if not sel:
                 messagebox.showwarning("Aviso", "Marca al menos una capa.", parent=dlg)
                 return
             res["v"] = sel
+            self._export_preferences = {
+                preference_key(it): {'selected': ev.get(), 'mode': mv.get(),
+                                     'clearance': float(cv.get().replace(',', '.')) if ev.get() else preferences.get(preference_key(it), {}).get('clearance', 0.5)}
+                for ev, mv, cv, it in rows}
             dlg.destroy()
 
         btns = tk.Frame(dlg, bg="#252535"); btns.pack(side="bottom", fill="x", pady=12, padx=14)
