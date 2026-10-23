@@ -234,10 +234,101 @@ class OriginalWorkflowTests(unittest.TestCase):
         invert = next(w for w in self.walk(win) if isinstance(w, tk.Checkbutton))
         invert.invoke()
         self.pump_events(.5)
-        for label in labels:
-            image = ImageTk.getimage(label.image).convert('L')
-            self.assertEqual(image.getpixel((width//4, height//2)), 255)
-            self.assertEqual(image.getpixel((width*3//4, height//2)), 0)
+        original = ImageTk.getimage(labels[0].image).convert('L')
+        self.assertEqual(original.getpixel((width//4, height//2)), 0)
+        self.assertEqual(original.getpixel((width*3//4, height//2)), 255)
+        converted = ImageTk.getimage(labels[1].image).convert('L')
+        self.assertEqual(converted.getpixel((width//4, height//2)), 255)
+        self.assertEqual(converted.getpixel((width*3//4, height//2)), 0)
+
+    def test_conversion_precise_values_steps_validation_and_apply(self):
+        from PIL import Image
+        self.app.overlay_image = Image.linear_gradient('L').resize((40, 30)).convert('RGB')
+        self.app.overlay_w_mm, self.app.overlay_h_mm = 6, 4.5
+        self.app._open_conversion_editor()
+        win = self.app._conv_editor
+        self.pump_events(.6)
+        controls = {w.winfo_name(): w for w in self.walk(win)
+                    if w.winfo_name() in ('threshold_control', 'contrast_control', 'pixel_control')}
+
+        def edit(name, text):
+            entry = controls[name+'_control'].nametowidget('value')
+            entry.delete(0, 'end')
+            entry.insert(0, text)
+            return entry
+
+        def button(name, caption):
+            return next(w for w in controls[name+'_control'].winfo_children()
+                        if isinstance(w, tk.Button) and w.cget('text') == caption)
+
+        entry = edit('contrast', '1,27')
+        button('contrast', '+').invoke()
+        self.assertEqual(entry.get(), '1,28')
+        button('contrast', '−').invoke()
+        self.assertEqual(entry.get(), '1,27')
+        button('contrast', 'Restablecer').invoke()
+        self.assertEqual(entry.get(), '1,00')
+        entry = edit('threshold', '255')
+        button('threshold', '+').invoke()
+        self.assertEqual(entry.get(), '255')
+        entry = edit('pixel', '0,15')
+        button('pixel', '−').invoke()
+        self.assertEqual(entry.get(), '0,15')
+
+        # Incomplete/non-finite input must never leak into export parameters.
+        apply = next(w for w in self.walk(win) if isinstance(w, tk.Button)
+                     and w.cget('text') == '✅ Aplicar a exportación')
+        win.geometry('900x600')
+        self.pump_events(.6)
+        self.assertTrue(apply.winfo_ismapped())
+        self.assertLess(apply.winfo_rooty()+apply.winfo_height(), win.winfo_rooty()+win.winfo_height())
+        errors = []
+        self.app.report_callback_exception = lambda *args: errors.append(args)
+        with patch('gerber_silkscreen_editor.messagebox.showinfo') as notice:
+            for invalid in ('', '-', 'nan', 'inf', 'texto'):
+                edit('contrast', invalid)
+                apply.invoke()
+                self.assertFalse(notice.called)
+                self.assertFalse(hasattr(self.app, '_conv_contrast'))
+            edit('contrast', '1,27')
+            edit('threshold', '174')
+            edit('pixel', '0,23')
+            apply.invoke()
+            self.assertTrue(notice.called)
+        self.assertEqual(self.app._conv_contrast, 1.27)
+        self.assertEqual(self.app.overlay_threshold.get(), 174)
+        self.assertEqual(self.app._conv_pxsize, .23)
+        self.pump_events(.6)
+        self.assertFalse(errors)
+        self.assertFalse(any(w.cget('text').startswith('Error:') for w in self.walk(win)
+                             if isinstance(w, tk.Label)))
+
+    def test_conversion_keeps_original_and_selected_algorithm_during_adjustment(self):
+        from PIL import Image, ImageTk
+        self.app.overlay_image = Image.linear_gradient('L').resize((40, 30)).convert('RGB')
+        self.app.overlay_w_mm, self.app.overlay_h_mm = 6, 4.5
+        self.app._conv_algo = 'floyd'
+        self.app._open_conversion_editor()
+        win = self.app._conv_editor
+        self.pump_events(.6)
+        labels = [w for w in self.walk(win) if isinstance(w, tk.Label) and w.cget('image')]
+        original = ImageTk.getimage(labels[0].image).tobytes()
+        contrast = next(w for w in self.walk(win) if isinstance(w, tk.Scale)
+                        and float(w.cget('to')) == 3)
+        with patch('gerber_silkscreen_editor._raster_ink_mask', wraps=_raster_ink_mask) as mask:
+            contrast.set(1.63)
+            self.pump_events(.15)
+            self.assertTrue(mask.called)
+            self.assertTrue(all(call.args[1] == 'floyd' for call in mask.call_args_list))
+        self.pump_events(.6)
+        self.assertEqual(ImageTk.getimage(labels[0].image).tobytes(), original)
+        threshold = next(w for w in self.walk(win) if isinstance(w, tk.Scale)
+                         and float(w.cget('to')) == 255)
+        radios = {w.cget('value'): w for w in self.walk(win) if isinstance(w, tk.Radiobutton)}
+        radios['bayer4'].invoke()
+        self.assertEqual(threshold.cget('state'), 'disabled')
+        radios['atkinson'].invoke()
+        self.assertEqual(threshold.cget('state'), 'normal')
 
     def test_front_panel_does_not_reset_logo_or_main_window(self):
         with tempfile.TemporaryDirectory() as folder:
