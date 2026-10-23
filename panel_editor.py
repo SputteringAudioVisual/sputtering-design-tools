@@ -10,13 +10,13 @@ from tkinter import ttk, filedialog, messagebox
 from panel_model import PanelDocument, Element, HEIGHT_MM, number, load_references, atomic_write
 
 
-class PanelEditor(tk.Tk):
-    def __init__(self, paths=(), project=None):
-        super().__init__()
+class PanelWorkspace:
+    def __init__(self, paths=(), project=None, master=None, document=None):
+        super().__init__(master) if master is not None else super().__init__()
         self.title('Sputtering Design Tools · Frontal Eurorack 3U')
         self.geometry('1240x850')
         self.minsize(950, 620)
-        self.document = PanelDocument.load(project) if project else PanelDocument()
+        self.document = copy.deepcopy(document) if document is not None else (PanelDocument.load(project) if project else PanelDocument())
         self.project_path = str(project) if project else None
         self.dirty = False
         self.history, self.future = [], []
@@ -37,6 +37,7 @@ class PanelEditor(tk.Tk):
         self.size = tk.StringVar(value='6.5')
         self.text = tk.StringVar(value='DRIVE')
         self._build()
+        self._apply_original_theme()
         self.protocol('WM_DELETE_WINDOW', self.close)
         self.bind('<Control-s>', lambda e: self.save())
         self.bind('<Control-z>', lambda e: self.undo() if not self._editing() else None)
@@ -49,6 +50,28 @@ class PanelEditor(tk.Tk):
 
     def _editing(self):
         return isinstance(self.focus_get(), (tk.Entry, ttk.Entry, tk.Text, ttk.Combobox))
+
+    def _apply_original_theme(self):
+        """Scope the additional window's styles; leave the original controls alone."""
+        self.configure(bg='#1e1e2e')
+        style = ttk.Style(self)
+        for widget_class in ('TFrame', 'TLabelframe', 'TLabel', 'TButton', 'TRadiobutton',
+                             'TCheckbutton', 'TEntry', 'TCombobox', 'TPanedwindow'):
+            style.configure('Panel.'+widget_class, background='#252535', foreground='#aaaacc',
+                            fieldbackground='#1a1a2e', insertcolor='white')
+            style.map('Panel.'+widget_class, background=[('active', '#3a3a5c')],
+                      fieldbackground=[('readonly', '#1a1a2e')], foreground=[('disabled', '#666680')])
+        style.configure('Panel.TLabelframe.Label', background='#252535', foreground='#9999dd')
+        for widget in self._descendants(self):
+            if isinstance(widget, ttk.Widget):
+                name = widget.winfo_class()
+                if name in ('TFrame', 'TLabelframe', 'TLabel', 'TButton', 'TRadiobutton',
+                             'TCheckbutton', 'TEntry', 'TCombobox', 'TPanedwindow'):
+                    widget.configure(style='Panel.'+name)
+            elif isinstance(widget, tk.Listbox):
+                widget.configure(bg='#1a1a2e', fg='#cccce0', selectbackground='#3a3a5c', highlightthickness=0)
+            elif isinstance(widget, tk.Canvas) and widget is not self.canvas:
+                widget.configure(bg='#252535')
 
     def _build(self):
         toolbar = ttk.Frame(self, padding=(10, 8))
@@ -202,7 +225,7 @@ class PanelEditor(tk.Tk):
 
     def load_pcb(self):
         paths = filedialog.askopenfilenames(parent=self, title='Cargar contorno y serigrafía Gerber / ZIP',
-                                           filetypes=[('Gerber / ZIP', '*.gbr *.ger *.art *.gto *.gbo *.gko *.gm1 *.gtl *.gbl *.gts *.gbs *.pho *.zip'), ('Todos', '*.*')])
+                                           filetypes=[('PCB / drills / ZIP', '*.gbr *.ger *.art *.gto *.gbo *.gko *.gm1 *.gtl *.gbl *.gts *.gbs *.pho *.drl *.xln *.exc *.zip *.txt'), ('Todos', '*.*')])
         if paths:
             self.load_paths(paths)
 
@@ -457,7 +480,8 @@ class PanelEditor(tk.Tk):
                 def xy(x, y):
                     return self.to_canvas(x+d.pcb_dx, y+d.pcb_dy)
                 for primitive in ref.layer.drawables:
-                    color = '#ece9e1' if primitive.get('polarity') == 'clear' else colors[layer_index % len(colors)]
+                    drill = ref.coord_format is not None
+                    color = '#ce602b' if drill else ('#ece9e1' if primitive.get('polarity') == 'clear' else colors[layer_index % len(colors)])
                     kind = primitive['type']
                     if kind == 'line':
                         c.create_line(*xy(primitive['x1'], primitive['y1']), *xy(primitive['x2'], primitive['y2']),
@@ -477,7 +501,11 @@ class PanelEditor(tk.Tk):
                                 c.create_line(*xy(x, y-sy+sx), *xy(x, y+sy-sx), fill=color,
                                               width=max(1, 2*sx*scale), capstyle='round')
                         else:
-                            c.create_oval(*box, fill=color, outline='')
+                            c.create_oval(*box, fill='' if drill else color, outline=color if drill else '', width=1)
+                            if drill:
+                                px, py = xy(x, y)
+                                c.create_line(px-3, py, px+3, py, fill=color)
+                                c.create_line(px, py-3, px, py+3, fill=color)
                     elif kind == 'region' and len(primitive['path']) > 2:
                         points = [v for p in primitive['path'] for v in xy(*p)]
                         c.create_polygon(*points, fill=color, outline='')
@@ -566,6 +594,14 @@ class PanelEditor(tk.Tk):
     def close(self):
         if self.confirm_discard():
             self.destroy()
+
+
+class PanelEditor(PanelWorkspace, tk.Tk):
+    """Explicit standalone panel mode; the main launcher opens the original UI."""
+
+
+class PanelWindow(PanelWorkspace, tk.Toplevel):
+    """Additional workspace that leaves the original Gerber editor alive."""
 
 
 if __name__ == '__main__':
