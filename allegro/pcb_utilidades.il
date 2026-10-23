@@ -1,0 +1,28 @@
+; Load this file, then: skill pcbCargar("C:/SPB_Data/pcbenv/pcb_tools")
+procedure(pcbCargar(carpeta)
+  prog((resultado)
+    pcbToolsRoot = if(rexMatchp("^[A-Za-z]:/" carpeta) || rexMatchp("^/" carpeta)
+      then carpeta else strcat(getWorkingDir() "/" carpeta))
+    pcbToolsVersion = "0.2.2"
+    load(strcat(pcbToolsRoot "/pcb_config.il"))
+    load(strcat(pcbToolsRoot "/pcb_proyecto.il"))
+    when(isFile(strcat(pcbToolsRoot "/pcb_local.il"))
+      load(strcat(pcbToolsRoot "/pcb_local.il")))
+    foreach(archivo '("pcb_anchos.il" "pcb_textos.il" "pcb_mascara.il" "pcb_fabricacion.il" "pcb_comandos.il")
+      resultado = errset(load(strcat(pcbToolsRoot "/" archivo)) t)
+      unless(resultado && car(resultado)
+        error("PCB: no se pudo cargar %s. Revisa la ruta y los archivos." archivo))
+    )
+    pcbInstalarComandos()
+    pcbUtilidadesInfo()
+    return(t)
+  )
+)
+
+procedure(pcbUtilidadesInfo()
+  ; GUI output must not depend on printf's buffered output port.
+  axlUIWPrint(nil "PCB: utilidades %s cargadas desde %s" pcbToolsVersion pcbToolsRoot)
+  axlUIWPrint(nil "PCB: comandos pcb_textos / pcb_mascara / pcb_anchos / pcb_fab_exportar.")
+  axlUIWPrint(nil "PCB: primero usa sus auditorias. Cargar no modifica la placa.")
+  t
+)

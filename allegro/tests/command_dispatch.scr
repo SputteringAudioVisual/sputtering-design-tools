@@ -1,0 +1,16 @@
+skill load("C:/SPB_Data/pcbenv/pcb_tools/pcb_cargar.il")
+skill load("C:/SPB_Data/pcbenv/pcb_tools/pcb_cargar.il")
+skill load("command_dispatch.il")
+skill pcbDispatchMarker("INFO")
+pcb_utilidades_info
+skill pcbDispatchMarker("MASK_APPLY")
+pcb_mascara
+skill pcbDispatchMarker("MASK_AUDIT")
+pcb_mascara_revisar
+skill pcbDispatchMarker("WIDTH_APPLY")
+pcb_anchos
+skill pcbDispatchMarker("WIDTH_AUDIT")
+pcb_anchos_auditar
+skill pcbDispatchFinish()
+exit
+no

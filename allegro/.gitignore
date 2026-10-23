@@ -1,0 +1,18 @@
+# Native integration test artifacts and PCB data stay local.
+*.brd
+*.brd.*
+*.dra
+*.pad
+*.psm
+*.log
+*.jrl*
+*.lck
+*.art
+*.drl
+*.rou
+Fabricacion/
+validation.txt
+probe.txt
+stdout.txt
+stderr.txt
+pcb_mascara_revision.txt
