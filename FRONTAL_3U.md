@@ -2,6 +2,8 @@
 
 Herramientas de diseño para Eurorack. Incluye el editor Gerber original y un espacio de trabajo para crear frontales 3U sobre una PCB de referencia.
 
+Versión comprobada en uso el 23 de octubre de 2026, con 48 pruebas locales superadas. El desarrollo queda cerrado por ahora y se retomará ante un fallo concreto. Véase [estado actual y cómo retomar](ESTADO_ACTUAL.md).
+
 ## Pantalla principal: la serigrafía original
 
 El inicio vuelve a ser **Gerber Silkscreen Editor**, con su barra, colores y controles originales. Siguen en su sitio Añadir capa, Importar Imagen, Editor de conversión, alineación, transformaciones, selección de capas del logo, Exportar Gerber y Generar capa nueva.
@@ -27,6 +29,8 @@ Las vistas comparten preparación y máscara con el conversor Gerber. La origina
 Si se ha cargado un ZIP o un proyecto con origen de fabricación registrado, se genera automáticamente una carpeta y un ZIP nuevos junto al ZIP de origen: por ejemplo, `WAVEDISTEQ_3_testrouted_fab_v003_edit_v001.zip`. Las siguientes exportaciones usan el siguiente número libre. Si se cargaron archivos sueltos, se pide la carpeta de destino.
 
 El paquete conserva los archivos originales no editados, incluidos taladros, parámetros e informes. Incluye las capas modificadas y un manifiesto nuevo con sumas SHA-256 y ajustes de conversión. El manifiesto anterior se conserva en `historial_editor/`. Los informes de Allegro corresponden al origen; las modificaciones necesitan su revisión CAM. La aplicación verifica el ZIP antes de dar la exportación por terminada y no sobrescribe el paquete original ni exportaciones anteriores.
+
+Con un contorno PCB cargado, la imagen se **recorta automáticamente por el borde** en la vista general, en la previsualización de exportación y en el Gerber generado. Se respeta su posición, escala y giro actuales: no se centra ni se ajusta de nuevo al exportar. El marco completo sigue disponible para moverla a mano. El recorte incluye el ancho real de los trazos y funciona también al generar una capa nueva y con SVG. Los contornos cerrados pueden ser cóncavos o tener vaciados; si el contorno detectado está abierto, hay que cerrarlo antes de exportar. Sin contorno cargado se mantiene la exportación libre. El recorte no añade separación respecto a los pads.
 
 ## Frontal Eurorack 3U
 
