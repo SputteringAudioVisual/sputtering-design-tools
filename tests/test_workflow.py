@@ -10,11 +10,45 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from design_app import DesignToolsApp
 from drill import DrillLayer
-from gerber_silkscreen_editor import GerberEditor, ImageToGerber
+from gerber_silkscreen_editor import GerberEditor, GerberLayer, ImageToGerber, _raster_ink_mask
 from panel_model import Reference, PanelDocument, load_references
 from test_panel import BOARD
 
 DRILLS = 'M48\nMETRIC,TZ\nT01C0.7\n%\nG90\nT01\nX1500000Y2000000\nX2500000\nM30\n'
+ALGOS = ('threshold', 'floyd', 'atkinson', 'bayer4', 'bayer8', 'stucki', 'jarvis')
+
+
+class ConversionTests(unittest.TestCase):
+    def test_all_algorithms_keep_black_ink_and_white_empty(self):
+        import numpy as np
+        for algo in ALGOS:
+            with self.subTest(algo=algo):
+                self.assertTrue(_raster_ink_mask(np.zeros((16, 16)), algo, 128).all())
+                self.assertFalse(_raster_ink_mask(np.full((16, 16), 255), algo, 128).any())
+
+    def test_bayer_ramp_has_even_tonal_progression(self):
+        import numpy as np
+        for algo in ('bayer4', 'bayer8'):
+            for value in (32, 64, 128, 192, 224):
+                with self.subTest(algo=algo, gray=value):
+                    coverage = _raster_ink_mask(np.full((16, 16), value), algo, 128).mean()
+                    self.assertAlmostEqual(coverage, 1-value/255, delta=.04)
+
+    def test_export_draws_only_the_black_half_for_every_algorithm(self):
+        from PIL import Image
+        image = Image.new('L', (24, 12), 255)
+        image.paste(0, (0, 0, 12, 12))
+        for algo in ALGOS:
+            with self.subTest(algo=algo):
+                commands = ImageToGerber(GerberLayer()).convert(
+                    image, 0, 0, 3.6, 1.8, dither_algo=algo)
+                layer = GerberLayer()
+                layer.raw_lines = ['%FSLAX36Y36*%\n', '%MOMM*%\n', *commands, 'M02*']
+                layer._parse()
+                self.assertTrue(layer.drawables)
+                for drawable in layer.drawables:
+                    self.assertLess(drawable['x1'], 1.8)
+                    self.assertLess(drawable['x2'], 1.8)
 
 
 class DrillTests(unittest.TestCase):
@@ -169,6 +203,41 @@ class OriginalWorkflowTests(unittest.TestCase):
         self.app._open_conversion_editor()
         self.pump_events(.6)
         self.assertTrue(self.app._conv_editor.winfo_exists())
+
+    def test_conversion_enlarges_both_views_and_preserves_polarity(self):
+        from PIL import Image, ImageTk
+        from tkinter import font as tkfont
+        self.app.overlay_image = Image.new('RGB', (40, 20), 'white')
+        self.app.overlay_image.paste('black', (0, 0, 20, 20))
+        self.app.overlay_w_mm, self.app.overlay_h_mm = 6, 3
+        self.app._conv_algo = 'atkinson'
+        self.app._conv_pxsize = .2
+        self.app._open_conversion_editor()
+        win = self.app._conv_editor
+        self.pump_events(.7)
+        labels = [w for w in self.walk(win) if isinstance(w, tk.Label) and w.cget('image')]
+        self.assertEqual(len(labels), 2)
+        width, height = labels[0].image.width(), labels[0].image.height()
+        self.assertGreater(width, 150, 'Small source must enlarge to fit the viewport')
+        self.assertEqual((width, height), (labels[1].image.width(), labels[1].image.height()))
+        self.assertGreaterEqual(width, labels[0].master.winfo_width()-6)
+        radios = [w for w in self.walk(win) if isinstance(w, tk.Radiobutton)]
+        self.assertEqual(self.app.getvar(radios[0].cget('variable')), 'atkinson')
+        self.assertGreaterEqual(tkfont.Font(win, font=radios[0].cget('font')).cget('size'), 11)
+        for radio in radios:
+            with self.subTest(algo=radio.cget('value')):
+                radio.invoke()
+                self.pump_events(.6)
+                image = ImageTk.getimage(labels[1].image).convert('L')
+                self.assertEqual(image.getpixel((width//4, height//2)), 0)
+                self.assertEqual(image.getpixel((width*3//4, height//2)), 255)
+        invert = next(w for w in self.walk(win) if isinstance(w, tk.Checkbutton))
+        invert.invoke()
+        self.pump_events(.5)
+        for label in labels:
+            image = ImageTk.getimage(label.image).convert('L')
+            self.assertEqual(image.getpixel((width//4, height//2)), 255)
+            self.assertEqual(image.getpixel((width*3//4, height//2)), 0)
 
     def test_front_panel_does_not_reset_logo_or_main_window(self):
         with tempfile.TemporaryDirectory() as folder:
