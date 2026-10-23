@@ -161,7 +161,4 @@ procedure(pcbSilkAplicar()
   )
 )
 
-axlCmdRegister("pcb_textos_auditar" 'pcbSilkAuditar)
-axlCmdRegister("pcb_textos" 'pcbSilkAplicar)
-
 printf("\nPCB: script de textos cargado. Ejecuta primero pcb_textos_auditar.\n")

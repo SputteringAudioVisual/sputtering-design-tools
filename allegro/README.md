@@ -20,6 +20,8 @@ skill load("C:/SPB_Data/pcbenv/pcb_tools/pcb_cargar.il")
 
 El comando `pcb_utilidades_info` muestra la versión y la carpeta activa. Usa siempre el cargador estándar, sin tildes ni `ñ`; las carpetas de pruebas y las copias de desarrollo no son instalaciones para trabajar. Al cargar solo se registran comandos: no se modifica la placa automáticamente.
 
+Desde 0.2.1, los nombres de la tabla siguiente son alias nativos que llaman a `skill funcion()`, la misma entrada que las llamadas directas. La carga retira los antiguos registros `axlCmdRegister` de estas utilidades y verifica los alias. Esto evita depender de esos callbacks en sesiones donde algunos nombres no mostraban resultado aunque las llamadas directas sí funcionaban. La ruta y las operaciones sobre la placa son las mismas.
+
 Para personalizar una placa, copia `config_ejemplo.il`, ajusta sus valores y cárgalo antes de ejecutar un comando. También puede cargarse antes de `pcbCargar`. Los valores se conservan al recargar el paquete. Las dimensiones de configuración siempre son milímetros; la conversión a unidades del diseño es automática.
 
 ## Comandos

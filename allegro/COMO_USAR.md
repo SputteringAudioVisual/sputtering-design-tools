@@ -1,6 +1,6 @@
 # Ruta única de utilidades Allegro
 
-Versión **0.2.0**. Esta es la referencia de carga para todos los proyectos y chats.
+Versión **0.2.1**. Esta es la referencia de carga para todos los proyectos y chats.
 
 Instalación compartida:
 
@@ -19,6 +19,8 @@ Al abrir Allegro de nuevo, la carga es automática. Para confirmar qué versión
 ```text
 pcb_utilidades_info
 ```
+
+Los nombres cortos ejecutan las llamadas directas `skill ...()` mediante alias de Allegro. La carga elimina los registros anteriores de estas utilidades y comprueba cada alias, de modo que recargar la sesión no conserva accesos antiguos.
 
 Flujo habitual de comprobación y exportación:
 

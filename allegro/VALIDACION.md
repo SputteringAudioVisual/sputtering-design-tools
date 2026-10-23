@@ -1,5 +1,15 @@
 # Validación
 
+## Versión 0.2.1: ejecución de los nombres cortos
+
+En una sesión gráfica del usuario, las llamadas directas `skill pcbMaskApply()`, `skill pcbMaskAudit()`, `skill pcbAplicarAnchos()` y `skill pcbAnchosAuditar()` respondieron, mientras que algunos accesos registrados no mostraban salida. Una prueba sin interfaz gráfica con los registros antiguos sí ejecutó todos los nombres; por tanto, no se reprodujo allí el silencio de esa sesión.
+
+La versión 0.2.1 define los nombres públicos y de compatibilidad mediante `axlSetAlias` con las mismas llamadas directas que funcionaron. Retira antes los registros propios anteriores y verifica los valores mediante `axlGetAlias`. No modifica las funciones de máscara, textos, anchos ni fabricación.
+
+`tests/command_dispatch.scr` ejecuta los nombres reales desde el intérprete de comandos, en lugar de llamar directamente a las funciones. La prueba comprueba también los alias y la ausencia de registros anteriores. Debe usarse exclusivamente con una copia desechable de la placa.
+
+Resultado nativo en Allegro 17.2 P028: **`DISPATCH_ALIASES_OK t`**, 66 redes de señal con regla asignada, salida comprobada para información, máscara, anchos y textos, y un ZIP con manifiesto 0.2.1 e integridad CRC/SHA-256 correcta. Se partió de una sesión que había cargado 0.2.0 y se cargó el nuevo paquete dos veces antes de ejecutar los nombres por consola.
+
 ## Versión 0.2.0: instalación única y ZIP dentro del proyecto
 
 Las seis pruebas automatizadas del empaquetador con Windows PowerShell 5.1 pasan: ruta con espacios y `ñ` e integridad SHA-256, protección de un ZIP existente, ausencia de un Gerber, archivo truncado, resultado de exportación con errores e invocación desde el shell de Windows con rutas entrecomilladas. También pasa la prueba de instalación: conservación de código de inicio ajeno y de sus bytes originales, conservación del perfil local y respaldo de los scripts antiguos antes de convertirlos en redirecciones.

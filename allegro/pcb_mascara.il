@@ -378,6 +378,4 @@ procedure(pcbMaskApply()
   )
 )
 
-axlCmdRegister("pcb_mascara_revisar" 'pcbMaskAudit ?cmdType "general")
-axlCmdRegister("pcb_mascara" 'pcbMaskApply ?cmdType "general")
 printf("PCB MASK cargado: pcb_mascara_revisar / pcb_mascara.\n")

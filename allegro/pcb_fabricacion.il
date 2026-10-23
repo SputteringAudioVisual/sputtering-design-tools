@@ -287,8 +287,4 @@ procedure(pcbFabExportar()
   )
 )
 
-axlCmdRegister("pcb_fab_auditar" 'pcbFabAuditar)
-axlCmdRegister("pcb_fab_configurar" 'pcbFabConfigurar)
-axlCmdRegister("pcb_fab_exportar" 'pcbFabExportar)
-
 printf("\nPCB FAB: script cargado. Ejecuta primero pcb_fab_auditar.\n")
