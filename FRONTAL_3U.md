@@ -12,6 +12,14 @@ El inicio vuelve a ser **Gerber Silkscreen Editor**, con su barra, colores y con
 
 `python sputtering_design_tools.py --panel` queda disponible para abrir solo el frontal de forma explícita. El lanzador normal, el acceso `.pyw` y el script Gerber histórico abren la interfaz de serigrafía.
 
+## Exportar la PCB con sus modificaciones
+
+**Exportar Gerber** mantiene el diálogo de capas y recetas. Las casillas tienen una marca de alto contraste y la selección, modo y holgura se conservan al volver a abrir el diálogo durante la sesión. Las capas sin marcar conservan su contenido original en el paquete.
+
+Si se ha cargado un ZIP o un proyecto con origen de fabricación registrado, se genera automáticamente una carpeta y un ZIP nuevos junto al ZIP de origen: por ejemplo, `WAVEDISTEQ_3_testrouted_fab_v003_edit_v001.zip`. Las siguientes exportaciones usan el siguiente número libre. Si se cargaron archivos sueltos, se pide la carpeta de destino.
+
+El paquete conserva los archivos originales no editados, incluidos taladros, parámetros e informes. Incluye las capas modificadas y un manifiesto nuevo con sumas SHA-256 y ajustes de conversión. El manifiesto anterior se conserva en `historial_editor/`. Los informes de Allegro corresponden al origen; las modificaciones necesitan su revisión CAM. La aplicación verifica el ZIP antes de dar la exportación por terminada y no sobrescribe el paquete original ni exportaciones anteriores.
+
 ## Frontal Eurorack 3U
 
 Primero abre la interfaz de serigrafía y pulsa el menú **Frontal Eurorack 3U…**. Los siguientes controles pertenecen a esa ventana adicional.
@@ -51,7 +59,6 @@ Las pruebas verifican unidades y aperturas, trazos modales, límites físicos, c
 Incorporada el 22 de octubre de 2026 como copia exacta del script existente. El hash de `BASELINE.md` identifica esa primera versión. El 23 de octubre se añadió el espacio de frontales y se corrigieron delimitadores, selección G54, operaciones modales y conversión de aperturas del lector para poder cargar las referencias a escala real. La primera carga de la distorsión verifica dimensiones y geometría reconocida; no equivale a validar el panel para fabricación.
 
 Origen y verificación: [BASELINE.md](BASELINE.md).
-La revisión inicial del editor se conserva en el repositorio local de trabajo.
 
 ## Ejecución
 
