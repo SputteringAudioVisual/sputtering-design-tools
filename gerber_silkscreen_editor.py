@@ -11,6 +11,7 @@ import math
 import re
 import os
 from pathlib import Path
+from board_clip import outline_contours, clip_mask, clipping_commands
 
 try:
     from PIL import Image, ImageTk, ImageOps, ImageFilter
@@ -1535,6 +1536,7 @@ class GerberEditor(tk.Tk):
         width = max(4, round(disp_w*raster['width_mm']/self.overlay_w_mm))
         height = max(4, round(disp_h*raster['height_mm']/self.overlay_h_mm))
         mask = raster['mask'].resize((width, height), Image.NEAREST)
+        mask = self._clip_logo_mask(mask, raster['width_mm'], raster['height_mm'])
         rgba = np.zeros((height, width, 4), dtype=np.uint8)
         rgba[np.array(mask)>0] = [255, 255, 255, 255]
         return Image.fromarray(rgba, 'RGBA')
@@ -1558,7 +1560,8 @@ class GerberEditor(tk.Tk):
         cache_key = (id(self.overlay_image), thresh, angle, disp_w, disp_h,
                      self.overlay_w_mm, self.overlay_h_mm, self.entry_dot.get(),
                      getattr(self, '_conv_algo', 'threshold'), getattr(self, '_conv_contrast', 1.0),
-                     getattr(self, '_conv_invert', False), getattr(self, '_conv_pxsize', None))
+                     getattr(self, '_conv_invert', False), getattr(self, '_conv_pxsize', None),
+                     self.overlay_x_mm, self.overlay_y_mm, self._board_clip_key())
         if cache_key != self._overlay_cache_key:
             rgba = self._make_overlay_image(disp_w, disp_h, thresh, angle)
             self._overlay_tk_cache = ImageTk.PhotoImage(rgba)
@@ -2323,7 +2326,8 @@ class GerberEditor(tk.Tk):
                             'pixel_mm': getattr(self, '_conv_pxsize', .15),
                             'x_mm': self.overlay_x_mm, 'y_mm': self.overlay_y_mm,
                             'width_mm': self.overlay_w_mm, 'height_mm': self.overlay_h_mm,
-                            'angle_deg': self.overlay_angle_deg}
+                            'angle_deg': self.overlay_angle_deg,
+                            'clip_to_pcb_outline': self._find_outline_layer() is not None}
                 folder, archive = package.finish(changes, settings, drill_formats)
             self.last_export_zip, self.last_export_folder = archive, folder
             messagebox.showinfo("Exportado", "✅ Paquete y ZIP nuevos:\n\n" + str(archive)
@@ -2447,6 +2451,7 @@ class GerberEditor(tk.Tk):
             width = max(1, round(raster['width_mm']*scale))
             height = max(1, round(raster['height_mm']*scale))
             mask = raster['mask'].resize((width, height), PILImage.NEAREST)
+            mask = self._clip_logo_mask(mask, raster['width_mm'], raster['height_mm'])
             cx = self.overlay_x_mm+self.overlay_w_mm/2
             cy = self.overlay_y_mm+self.overlay_h_mm/2
             return mask, *to_px(cx, cy)
@@ -2780,16 +2785,69 @@ class GerberEditor(tk.Tk):
     def _build_logo_cmds(self, converter, thresh, clearance_mm=0.0):
         """Genera los comandos Gerber del logo (SVG o raster)."""
         ext = Path(self.overlay_image_path).suffix.lower() if hasattr(self, 'overlay_image_path') else ""
-        if ext == ".svg" and SVG_AVAILABLE and getattr(self, 'overlay_svg_path', None):
+        if (ext == ".svg" and SVG_AVAILABLE and getattr(self, 'overlay_svg_path', None)
+                and self.overlay_angle_deg % 360 == 0):
             try:
-                return converter.convert_svg_paths(
+                commands = converter.convert_svg_paths(
                     self.overlay_svg_path,
                     self.overlay_x_mm, self.overlay_y_mm,
                     self.overlay_w_mm, self.overlay_h_mm
                 )
             except Exception:
                 return self._export_raster(converter, thresh, clearance_mm)
+            return self._clip_logo_commands(commands, converter.layer)
         return self._export_raster(converter, thresh, clearance_mm)
+
+    def _board_clip_key(self):
+        entry = self._find_outline_layer()
+        return (entry['layer'], id(entry['layer'].drawables)) if entry else None
+
+    def _board_clip_contours(self):
+        entry = self._find_outline_layer()
+        if entry is None:
+            return None
+        key = self._board_clip_key()
+        if getattr(self, '_board_contours_key', None) != key:
+            self._board_contours = outline_contours(entry['layer'])
+            self._board_contours_key = key
+        return self._board_contours
+
+    def _clip_logo_mask(self, mask, width_mm, height_mm):
+        try:
+            contours = self._board_clip_contours()
+        except ValueError:
+            # Keep an incomplete outline editable. Export reports the error.
+            return mask
+        if contours is None:
+            return mask
+        cx = self.overlay_x_mm+self.overlay_w_mm/2
+        cy = self.overlay_y_mm+self.overlay_h_mm/2
+        return clip_mask(mask, contours, cx-width_mm/2, cy-height_mm/2, width_mm, height_mm)
+
+    def _clip_logo_commands(self, commands, layer):
+        contours = self._board_clip_contours()
+        if contours is None or not commands:
+            return commands
+        # Include the complete stroke width and clearance, not only its centreline.
+        probe = GerberLayer()
+        probe.raw_lines = [f'%FSLAX{layer.format_x[0]}{layer.format_x[1]}Y{layer.format_y[0]}{layer.format_y[1]}*%',
+                           '%MOIN*%' if layer.unit == 'IN' else '%MOMM*%', *commands]
+        probe._parse()
+        points = [p for path in contours for p in path]
+        radius = 0.0
+        for d in probe.drawables:
+            if d['type'] == 'line':
+                points.extend([(d['x1'], d['y1']), (d['x2'], d['y2'])])
+                radius = max(radius, d['width']/2)
+            elif d['type'] == 'flash':
+                points.append((d['x'], d['y']))
+                radius = max(radius, d['sx']/2, d['sy']/2)
+            elif d['type'] == 'region':
+                points.extend(d['path'])
+        margin = radius+1.0
+        bounds = (min(p[0] for p in points)-margin, min(p[1] for p in points)-margin,
+                  max(p[0] for p in points)+margin, max(p[1] for p in points)+margin)
+        return commands+clipping_commands(contours, bounds, layer)
 
     def _find_loaded_layer_for_tag(self, tag):
         """Busca una capa cargada cuyo nombre coincida con el tag (TOP_SILK, etc.)."""
@@ -2950,18 +3008,7 @@ class GerberEditor(tk.Tk):
             converter = ImageToGerber(base_layer)
             thresh = self.overlay_threshold.get()
 
-            ext_img = Path(self.overlay_image_path).suffix.lower() if hasattr(self, 'overlay_image_path') else ""
-            if ext_img == ".svg" and SVG_AVAILABLE and getattr(self, 'overlay_svg_path', None):
-                try:
-                    cmds = converter.convert_svg_paths(
-                        self.overlay_svg_path,
-                        self.overlay_x_mm, self.overlay_y_mm,
-                        self.overlay_w_mm, self.overlay_h_mm
-                    )
-                except Exception:
-                    cmds = self._export_raster(converter, thresh)
-            else:
-                cmds = self._export_raster(converter, thresh)
+            cmds = self._build_logo_cmds(converter, thresh)
 
             base_layer.export_new_layer(cmds, output_path, layer_name=name_tag)
 
@@ -2982,7 +3029,9 @@ class GerberEditor(tk.Tk):
         for entry in self.gerber_layers:
             name = entry["name"].upper()
             hdr = "".join(entry["layer"].raw_lines[:20]).upper()
-            if "OUTLINE" in name or "OUTLINE" in hdr or "BOARD GEOMETRY" in hdr:
+            if (any(token in name for token in ('OUTLINE', 'PROFILE', 'EDGE_CUTS'))
+                    or Path(name).suffix.lower() in {'.gko', '.gm1'}
+                    or 'OUTLINE' in hdr or 'BOARD GEOMETRY' in hdr):
                 return entry
         return None
 
@@ -3175,10 +3224,11 @@ class GerberEditor(tk.Tk):
             getattr(self, '_conv_invert', False))
         cx = self.overlay_x_mm + self.overlay_w_mm/2
         cy = self.overlay_y_mm + self.overlay_h_mm/2
-        return converter.convert(gray, cx-width/2, cy-height/2, width, height,
+        commands = converter.convert(gray, cx-width/2, cy-height/2, width, height,
             threshold=thresh, dot_size_mm=dot_size, clearance_mm=clearance_mm,
             dither_algo=getattr(self, '_conv_algo', 'threshold'),
             dither_px_mm=getattr(self, '_conv_pxsize', dot_size))
+        return self._clip_logo_commands(commands, converter.layer)
 
 
 # ─────────────────────────────────────────────
