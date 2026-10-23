@@ -431,8 +431,8 @@ def _apply_bayer(arr, n):
     def _bm(n):
         if n == 1: return np.array([[0]])
         m = _bm(n//2)
-        return np.bmat([[4*m, 4*m+2], [4*m+3, 4*m+1]]).A / (n*n)
-    bm = _bm(n) * 255; h, w = arr.shape
+        return np.block([[4*m, 4*m+2], [4*m+3, 4*m+1]])
+    bm = (_bm(n) + .5) * (255 / (n*n)); h, w = arr.shape
     tiled = np.tile(bm, (h//n+1, w//n+1))[:h, :w]
     return arr < tiled
 
@@ -454,6 +454,23 @@ def _apply_error_diffusion(arr, thresh, method):
                 ny,nx = y+dy, x+dx
                 if 0<=ny<h and 0<=nx<w: a[ny,nx] += err * wt / div
     return out
+
+
+def _raster_ink_mask(arr, algo, threshold):
+    """Máscara común para preview y Gerber: True siempre significa tinta."""
+    import numpy as np
+    arr = np.asarray(arr, dtype=np.float32)
+    if algo == 'floyd':
+        return _apply_floyd(arr, threshold)
+    if algo == 'atkinson':
+        return _apply_atkinson(arr, threshold)
+    if algo == 'bayer4':
+        return _apply_bayer(arr, 4)
+    if algo == 'bayer8':
+        return _apply_bayer(arr, 8)
+    if algo in ('stucki', 'jarvis'):
+        return _apply_error_diffusion(arr, threshold, algo)
+    return arr < threshold
 
 
 class ImageToGerber:
@@ -498,20 +515,7 @@ class ImageToGerber:
         resized_dith = gray.resize((dith_cols, dith_rows), Image.LANCZOS)
         arr = np.array(resized_dith, dtype=np.float32)
 
-        if dither_algo == 'floyd':
-            dark_dith = _apply_floyd(arr, threshold)
-        elif dither_algo == 'atkinson':
-            dark_dith = _apply_atkinson(arr, threshold)
-        elif dither_algo == 'bayer4':
-            dark_dith = _apply_bayer(arr, 4)
-        elif dither_algo == 'bayer8':
-            dark_dith = _apply_bayer(arr, 8)
-        elif dither_algo == 'stucki':
-            dark_dith = _apply_error_diffusion(arr, threshold, 'stucki')
-        elif dither_algo == 'jarvis':
-            dark_dith = _apply_error_diffusion(arr, threshold, 'jarvis')
-        else:
-            dark_dith = arr < threshold
+        dark_dith = _raster_ink_mask(arr, dither_algo, threshold)
 
         # 2) Escalar la máscara binaria a resolución de exportación (NEAREST = bloques)
         if dith_cols != exp_cols or dith_rows != exp_rows:
@@ -1895,24 +1899,47 @@ class GerberEditor(tk.Tk):
         win = tk.Toplevel(self)
         win.title("Editor de conversión")
         win.configure(bg="#252535")
-        win.geometry("860x640")
+        win.geometry(f"{min(1200, self.winfo_screenwidth()-60)}x{min(900, self.winfo_screenheight()-100)}")
+        win.minsize(850, 600)
         win.resizable(True, True)
         self._conv_editor = win
 
         # ── Parámetros (izquierda) ──
-        left = tk.Frame(win, bg="#252535", width=220)
-        left.pack(side="left", fill="y", padx=10, pady=10)
-        left.pack_propagate(False)
+        from tkinter import font as tkfont
+        control_font = ("Segoe UI", 11)
+        label_font = ("Segoe UI", 10, "bold")
+        sidebar_width = max(310, tkfont.Font(win, font=control_font).measure("Dithering Floyd-Steinberg") + 55)
+        sidebar = tk.Frame(win, bg="#252535", width=sidebar_width)
+        sidebar.pack(side="left", fill="y", padx=10, pady=10)
+        sidebar.pack_propagate(False)
+        scroller = tk.Canvas(sidebar, bg="#252535", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(sidebar, orient="vertical", command=scroller.yview)
+        scrollbar.pack(side="right", fill="y")
+        scroller.pack(side="left", fill="both", expand=True)
+        scroller.configure(yscrollcommand=scrollbar.set)
+        left = tk.Frame(scroller, bg="#252535")
+        controls_id = scroller.create_window(0, 0, window=left, anchor="nw")
+        left.bind("<Configure>", lambda e: scroller.configure(scrollregion=scroller.bbox("all")))
+        scroller.bind("<Configure>", lambda e: scroller.itemconfigure(controls_id, width=e.width))
+        def scroll_controls(event):
+            widget = event.widget
+            while widget is not None:
+                if widget is sidebar:
+                    scroller.yview_scroll(-1 if event.delta > 0 else 1, "units")
+                    return "break"
+                widget = getattr(widget, 'master', None)
+        win.bind("<MouseWheel>", scroll_controls, add="+")
 
         def lbl(text, fg="#ccccdd"):
             tk.Label(left, text=text, bg="#252535", fg=fg,
-                     font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(8,1))
+                     font=label_font, wraplength=sidebar_width-35, justify="left",
+                     anchor="w").pack(fill="x", pady=(8,1))
         def sep():
             tk.Frame(left, bg="#444466", height=1).pack(fill="x", pady=4)
 
         # Algoritmo
         lbl("Algoritmo de conversión")
-        algo_var = tk.StringVar(value="threshold")
+        algo_var = tk.StringVar(value=getattr(self, '_conv_algo', 'threshold'))
         algos = [
             ("Umbral simple",       "threshold"),
             ("Dithering Floyd-Steinberg", "floyd"),
@@ -1925,7 +1952,7 @@ class GerberEditor(tk.Tk):
         for txt, val in algos:
             tk.Radiobutton(left, text=txt, variable=algo_var, value=val,
                            bg="#252535", fg="#ddddee", selectcolor="#1a1a2e",
-                           activebackground="#252535", font=("Segoe UI", 8),
+                           activebackground="#252535", font=control_font,
                            anchor="w", command=lambda: refresh(fast=True)
                            ).pack(fill="x", padx=4)
 
@@ -1934,7 +1961,7 @@ class GerberEditor(tk.Tk):
         thresh_var = tk.IntVar(value=self.overlay_threshold.get())
         tk.Scale(left, variable=thresh_var, from_=0, to=255, orient="horizontal",
                  bg="#252535", fg="white", troughcolor="#1a1a2e",
-                 highlightthickness=0, command=lambda v: refresh(fast=True)
+                 font=control_font, highlightthickness=0, command=lambda v: refresh(fast=True)
                  ).pack(fill="x")
 
         sep()
@@ -1959,13 +1986,13 @@ class GerberEditor(tk.Tk):
             c = max(1, int(round(w_mm/px))); r = max(1, int(round(h_mm/px)))
             return f"{c}×{r} px"
 
-        pxsize_var = tk.DoubleVar(value=min(max(min_px, float(self.entry_dot.get())), max_px))
+        pxsize_var = tk.DoubleVar(value=min(max(min_px, getattr(self, '_conv_pxsize', float(self.entry_dot.get()))), max_px))
         px_scale = tk.Scale(left, variable=pxsize_var, from_=min_px, to=max_px,
                             resolution=0.01, orient="horizontal",
                             bg="#252535", fg="white", troughcolor="#1a1a2e",
-                            highlightthickness=0, command=lambda v: refresh(fast=True))
+                            font=control_font, highlightthickness=0, command=lambda v: refresh(fast=True))
         px_scale.pack(fill="x")
-        px_info = tk.Label(left, text="", height=2, bg="#252535", fg="#ffcc44", font=("Segoe UI", 8))
+        px_info = tk.Label(left, text="", height=2, bg="#252535", fg="#ffcc44", font=("Segoe UI", 10))
         px_info.pack()
 
         sep()
@@ -1973,7 +2000,7 @@ class GerberEditor(tk.Tk):
         contrast_var = tk.DoubleVar(value=getattr(self, '_conv_contrast', 1.0))
         tk.Scale(left, variable=contrast_var, from_=0.3, to=3.0, resolution=0.05,
                  orient="horizontal", bg="#252535", fg="white", troughcolor="#1a1a2e",
-                 highlightthickness=0, command=lambda v: refresh(fast=True)
+                 font=control_font, highlightthickness=0, command=lambda v: refresh(fast=True)
                  ).pack(fill="x")
 
         sep()
@@ -1981,7 +2008,7 @@ class GerberEditor(tk.Tk):
         invert_var = tk.BooleanVar(value=getattr(self, '_conv_invert', False))
         tk.Checkbutton(left, text="Invertir negro/blanco", variable=invert_var,
                        bg="#252535", fg="#ddddee", selectcolor="#1a1a2e",
-                       activebackground="#252535", font=("Segoe UI", 8),
+                       activebackground="#252535", font=control_font,
                        command=lambda: refresh(fast=False)).pack(anchor="w")
 
         sep()
@@ -2004,10 +2031,10 @@ class GerberEditor(tk.Tk):
 
         tk.Button(left, text="✅ Aplicar a exportación", command=apply_to_main,
                   bg="#2244aa", fg="white", relief="flat",
-                  font=("Segoe UI", 9, "bold"), pady=6).pack(fill="x", pady=(8,2))
+                  font=("Segoe UI", 11, "bold"), pady=6).pack(fill="x", pady=(8,2))
         tk.Button(left, text="Cerrar", command=win.destroy,
                   bg="#3a3a5c", fg="white", relief="flat",
-                  font=("Segoe UI", 8), pady=4).pack(fill="x")
+                  font=control_font, pady=4).pack(fill="x")
 
         # ── Preview (derecha) ──
         right = tk.Frame(win, bg="#1a1a2e")
@@ -2016,9 +2043,9 @@ class GerberEditor(tk.Tk):
         top_bar = tk.Frame(right, bg="#1a1a2e")
         top_bar.pack(fill="x", pady=(0,4))
         tk.Label(top_bar, text="Original", bg="#1a1a2e", fg="#aaaacc",
-                 font=("Segoe UI", 8)).pack(side="left", padx=8)
+                 font=control_font).pack(side="left", padx=8)
         tk.Label(top_bar, text="Resultado Gerber", bg="#1a1a2e", fg="#ffcc44",
-                 font=("Segoe UI", 8)).pack(side="right", padx=8)
+                 font=control_font).pack(side="right", padx=8)
 
         preview_frame = tk.Frame(right, bg="#1a1a2e")
         preview_frame.pack(fill="both", expand=True)
@@ -2039,7 +2066,7 @@ class GerberEditor(tk.Tk):
         lbl_conv.place(relx=.5, rely=.5, anchor="center")
 
         info_lbl = tk.Label(right, text="", bg="#1a1a2e", fg="#888899",
-                            font=("Segoe UI", 7), width=1, height=1)
+                            font=("Segoe UI", 10), width=1, height=2)
         info_lbl.pack(fill="x", pady=2)
 
         self._conv_refresh_id = None
@@ -2092,11 +2119,6 @@ class GerberEditor(tk.Tk):
             if invert_var.get():
                 img_enh = ImageOps.invert(img_enh)
 
-            # Preview original (escalado a PW×PH)
-            orig_disp = img_enh.copy()
-            orig_disp.thumbnail((PW, PH), PILImg.LANCZOS)
-            orig_disp = orig_disp.convert("RGB")
-
             # Calcular resolución en píxeles basada en tamaño de píxel visual
             dot = max(self.JLCPCB_MIN_MM, pxsize_var.get())
             w_mm_r = self.overlay_w_mm; h_mm_r = self.overlay_h_mm
@@ -2119,35 +2141,16 @@ class GerberEditor(tk.Tk):
             algo = algo_var.get()
             thresh = thresh_var.get()
 
-            # Modo rápido: umbral simple siempre (los dithering error-diffusion son lentos)
-            if fast or algo == "threshold":
-                result = (arr < thresh).astype(np.uint8) * 255
+            # Una sola convención de polaridad en preview y exportación.
+            ink = _raster_ink_mask(arr, 'threshold' if fast else algo, thresh)
+            res_img = PILImg.fromarray(np.where(ink, 0, 255).astype(np.uint8)).convert("RGB")
 
-            elif algo == "floyd":
-                result = _dither_floyd(arr, thresh)
-
-            elif algo == "atkinson":
-                result = _dither_atkinson(arr, thresh)
-
-            elif algo == "bayer4":
-                result = _dither_bayer(arr, 4)
-
-            elif algo == "bayer8":
-                result = _dither_bayer(arr, 8)
-
-            elif algo == "stucki":
-                result = _dither_error(arr, thresh, "stucki")
-
-            elif algo == "jarvis":
-                result = _dither_error(arr, thresh, "jarvis")
-
-            else:
-                result = (arr < thresh).astype(np.uint8) * 255
-
-            # Resultado como imagen visualizable
-            # Mostrar resultado manteniendo aspect ratio (igual que la imagen original)
-            res_img = PILImg.fromarray((255 - result).astype(np.uint8), "L").convert("RGB")
-            res_img.thumbnail((PW, PH), PILImg.NEAREST)
+            # Ajustar ambas vistas al espacio disponible, incluso ampliando.
+            # El zoom visual no cambia las medidas físicas ni la resolución Gerber.
+            scale = min(PW / w_mm_r, PH / h_mm_r)
+            display_size = (max(1, int(w_mm_r * scale)), max(1, int(h_mm_r * scale)))
+            orig_disp = img_enh.convert("RGB").resize(display_size, PILImg.LANCZOS)
+            res_img = res_img.resize(display_size, PILImg.NEAREST)
 
             from PIL import ImageTk as PILImageTk
             tk_orig = PILImageTk.PhotoImage(orig_disp)
@@ -2155,84 +2158,15 @@ class GerberEditor(tk.Tk):
             lbl_orig.config(image=tk_orig); lbl_orig.image = tk_orig
             lbl_conv.config(image=tk_conv); lbl_conv.image = tk_conv
 
-            dark_px = int(np.sum(result > 128))
+            dark_px = int(np.count_nonzero(ink))
             exp_cols = max(1, int(round(w_mm_r / self.JLCPCB_MIN_MM)))
             exp_rows = max(1, int(round(h_mm_r / self.JLCPCB_MIN_MM)))
             px_info.config(text=f"Píxel visual: {dot:.2f}mm → {cols}×{rows} px\n"
                                  f"Exportación: 0.15mm → {exp_cols}×{exp_rows} px")
             quality_note = "  ⚡ vista rápida…" if fast else ""
             info_lbl.config(text=f"Puntos de tinta: {dark_px}  ·  "
-                                  f"Algoritmo: {algo_var.get()}{quality_note}")
-
-        # ── Algoritmos de dithering ──
-        def _dither_floyd(arr, thresh):
-            import numpy as np
-            a = arr.copy().astype(np.float32)
-            h, w = a.shape
-            out = np.zeros_like(a, dtype=np.uint8)
-            for y in range(h):
-                for x in range(w):
-                    old = a[y, x]
-                    new = 0.0 if old < thresh else 255.0
-                    out[y, x] = int(new)
-                    err = old - new
-                    if x+1 < w:   a[y,x+1]   += err * 7/16
-                    if y+1 < h:
-                        if x-1 >= 0: a[y+1,x-1] += err * 3/16
-                        a[y+1,x]   += err * 5/16
-                        if x+1 < w:  a[y+1,x+1] += err * 1/16
-            return out
-
-        def _dither_atkinson(arr, thresh):
-            import numpy as np
-            a = arr.copy().astype(np.float32)
-            h, w = a.shape
-            out = np.zeros_like(a, dtype=np.uint8)
-            for y in range(h):
-                for x in range(w):
-                    old = a[y, x]
-                    new = 0.0 if old < thresh else 255.0
-                    out[y, x] = int(new)
-                    err = (old - new) / 8
-                    for dy, dx in [(0,1),(0,2),(1,-1),(1,0),(1,1),(2,0)]:
-                        ny, nx = y+dy, x+dx
-                        if 0 <= ny < h and 0 <= nx < w:
-                            a[ny, nx] += err
-            return out
-
-        def _dither_bayer(arr, n):
-            import numpy as np
-            def bayer_matrix(n):
-                if n == 1: return np.array([[0]])
-                m = bayer_matrix(n//2)
-                return np.bmat([[4*m, 4*m+2], [4*m+3, 4*m+1]]).A / (n*n)
-            bm = bayer_matrix(n) * 255
-            h, w = arr.shape
-            tiled = np.tile(bm, (h//n+1, w//n+1))[:h, :w]
-            return ((arr < tiled) * 255).astype(np.uint8)
-
-        def _dither_error(arr, thresh, method):
-            import numpy as np
-            if method == "stucki":
-                kernel = [(0,1,8),(0,2,4),(1,-2,2),(1,-1,4),(1,0,8),(1,1,4),(1,2,2),(2,-2,1),(2,-1,2),(2,0,4),(2,1,2),(2,2,1)]
-                div = 42
-            else:  # jarvis
-                kernel = [(0,1,7),(0,2,5),(1,-2,3),(1,-1,5),(1,0,7),(1,1,5),(1,2,3),(2,-2,1),(2,-1,3),(2,0,5),(2,1,3),(2,2,1)]
-                div = 48
-            a = arr.copy().astype(np.float32)
-            h, w = a.shape
-            out = np.zeros_like(a, dtype=np.uint8)
-            for y in range(h):
-                for x in range(w):
-                    old = a[y,x]
-                    new = 0.0 if old < thresh else 255.0
-                    out[y,x] = int(new)
-                    err = old - new
-                    for dy,dx,wt in kernel:
-                        ny,nx = y+dy, x+dx
-                        if 0<=ny<h and 0<=nx<w:
-                            a[ny,nx] += err * wt / div
-            return out
+                                  f"Algoritmo: {algo_var.get()}{quality_note}\n"
+                                  "Vista ampliada · Negro = tinta / blanco = sin tinta")
 
         # Configure en un Toplevel también recibe los cambios de sus hijos.
         # Escuchar solo el área de preview evita que dibujar dispare otro render.
