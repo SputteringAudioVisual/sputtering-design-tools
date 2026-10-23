@@ -473,6 +473,39 @@ def _raster_ink_mask(arr, algo, threshold):
     return arr < threshold
 
 
+def _prepare_logo_image(image, width_mm, height_mm, angle, contrast, invert):
+    """Misma rotación, contraste y elección de zonas en todas las vistas/Gerber."""
+    from PIL import ImageEnhance, ImageOps
+    background = (0, 0, 0) if invert else (255, 255, 255)
+    if image.mode in {'RGBA', 'LA'} or 'transparency' in image.info:
+        original = Image.alpha_composite(Image.new('RGBA', image.size, background+(255,)),
+                                         image.convert('RGBA')).convert('RGB')
+    else:
+        original = image.convert('RGB')
+    if angle % 360:
+        original = original.rotate(-angle, expand=True, resample=Image.BICUBIC, fillcolor=background)
+        radians = math.radians(angle)
+        c, s = abs(math.cos(radians)), abs(math.sin(radians))
+        width_mm, height_mm = width_mm*c+height_mm*s, width_mm*s+height_mm*c
+    gray = original.convert('L')
+    if contrast != 1.0:
+        gray = ImageEnhance.Contrast(gray).enhance(contrast)
+    if invert:
+        gray = ImageOps.invert(gray)
+    return original, gray, width_mm, height_mm
+
+
+def _image_ink_mask(gray, width_mm, height_mm, pixel_mm, algorithm, threshold, limit=None):
+    import numpy as np
+    cols = max(1, int(round(width_mm/pixel_mm)))
+    rows = max(1, int(round(height_mm/pixel_mm)))
+    if limit and max(cols, rows) > limit:
+        factor = limit/max(cols, rows)
+        cols, rows = max(1, int(cols*factor)), max(1, int(rows*factor))
+    small = gray.resize((cols, rows), Image.LANCZOS)
+    return _raster_ink_mask(np.array(small, dtype=np.float32), algorithm, threshold)
+
+
 class ImageToGerber:
     """Convierte una imagen PIL a comandos Gerber de líneas/flashes."""
 
@@ -508,14 +541,9 @@ class ImageToGerber:
 
         # Resolución de dithering (puede ser más gruesa para efecto de trama visible)
         px_mm = max(dot_mm, dither_px_mm) if dither_px_mm else dot_mm
-        dith_cols = max(1, int(round(width_mm / px_mm)))
-        dith_rows = max(1, int(round(height_mm / px_mm)))
-
-        # 1) Dithering a la resolución del píxel visual
-        resized_dith = gray.resize((dith_cols, dith_rows), Image.LANCZOS)
-        arr = np.array(resized_dith, dtype=np.float32)
-
-        dark_dith = _raster_ink_mask(arr, dither_algo, threshold)
+        # 1) La misma máscara que las vistas previas, a resolución de fabricación.
+        dark_dith = _image_ink_mask(gray, width_mm, height_mm, px_mm, dither_algo, threshold)
+        dith_rows, dith_cols = dark_dith.shape
 
         # 2) Escalar la máscara binaria a resolución de exportación (NEAREST = bloques)
         if dith_cols != exp_cols or dith_rows != exp_rows:
@@ -1476,40 +1504,40 @@ class GerberEditor(tk.Tk):
                     self.canvas.create_oval(xc-sx, yc-sy, xc+sx, yc+sy,
                                             fill=color, outline="")
 
-    def _make_overlay_image(self, disp_w: int, disp_h: int, thresh: int, angle: float):
-        """
-        Genera la imagen RGBA del overlay al TAMAÑO EXACTO de display (disp_w x disp_h),
-        para que coincida pixel a pixel con el marco. El procesado numpy se hace a
-        resolución reducida (rápido) y luego se escala al tamaño real.
-        """
+    def _logo_raster(self, thresh=None, *, algorithm=None, contrast=None, invert=None,
+                     pixel_mm=None, angle=None, limit=600):
         import numpy as np
+        try: dot = max(.15, float(self.entry_dot.get()))
+        except ValueError: dot = .15
+        thresh = self.overlay_threshold.get() if thresh is None else thresh
+        algorithm = getattr(self, '_conv_algo', 'threshold') if algorithm is None else algorithm
+        contrast = getattr(self, '_conv_contrast', 1.0) if contrast is None else contrast
+        invert = getattr(self, '_conv_invert', False) if invert is None else invert
+        pixel_mm = max(dot, getattr(self, '_conv_pxsize', dot) if pixel_mm is None else pixel_mm)
+        angle = self.overlay_angle_deg if angle is None else angle
+        key = (id(self.overlay_image), self.overlay_w_mm, self.overlay_h_mm, angle,
+               thresh, algorithm, contrast, invert, pixel_mm, limit)
+        cache = getattr(self, '_logo_raster_cache', {})
+        if key not in cache:
+            original, gray, width, height = _prepare_logo_image(
+                self.overlay_image, self.overlay_w_mm, self.overlay_h_mm, angle, contrast, invert)
+            ink = _image_ink_mask(gray, width, height, pixel_mm, algorithm, thresh, limit)
+            mask = Image.fromarray(ink.astype(np.uint8)*255)
+            if len(cache) >= 4: cache.pop(next(iter(cache)))
+            cache[key] = {'original': original, 'mask': mask, 'width_mm': width,
+                          'height_mm': height, 'pixel_mm': pixel_mm}
+            self._logo_raster_cache = cache
+        return cache[key]
 
-        disp_w = max(4, int(disp_w))
-        disp_h = max(4, int(disp_h))
-
-        # Resolución de procesado: capada para que numpy sea rápido
-        PROC_CAP = 600
-        pw = max(4, min(disp_w, PROC_CAP))
-        ph = max(4, min(disp_h, PROC_CAP))
-
-        src = self.overlay_image.convert("L")
-        small = src.resize((pw, ph), Image.BILINEAR)
-        arr = np.array(small, dtype=np.uint8)
-        mask = arr < thresh
-
-        rgba_arr = np.zeros((ph, pw, 4), dtype=np.uint8)
-        rgba_arr[mask] = [0, 170, 255, 210]
-        rgba = Image.fromarray(rgba_arr, "RGBA")
-
-        # Escalar al tamaño de display real → coincide exactamente con el marco
-        if (pw, ph) != (disp_w, disp_h):
-            rgba = rgba.resize((disp_w, disp_h), Image.NEAREST)
-
-        # Rotar al final
-        if angle % 360 != 0:
-            rgba = rgba.rotate(-angle, expand=True, resample=Image.NEAREST)
-
-        return rgba
+    def _make_overlay_image(self, disp_w: int, disp_h: int, thresh: int, angle: float):
+        import numpy as np
+        raster = self._logo_raster(thresh, angle=angle)
+        width = max(4, round(disp_w*raster['width_mm']/self.overlay_w_mm))
+        height = max(4, round(disp_h*raster['height_mm']/self.overlay_h_mm))
+        mask = raster['mask'].resize((width, height), Image.NEAREST)
+        rgba = np.zeros((height, width, 4), dtype=np.uint8)
+        rgba[np.array(mask)>0] = [255, 255, 255, 255]
+        return Image.fromarray(rgba, 'RGBA')
 
     def _draw_overlay(self):
         if not self.overlay_image:
@@ -1527,7 +1555,10 @@ class GerberEditor(tk.Tk):
         disp_w = min(disp_w, MAX_DISP)
         disp_h = min(disp_h, MAX_DISP)
 
-        cache_key = (thresh, round(angle, 1), disp_w, disp_h)
+        cache_key = (id(self.overlay_image), thresh, angle, disp_w, disp_h,
+                     self.overlay_w_mm, self.overlay_h_mm, self.entry_dot.get(),
+                     getattr(self, '_conv_algo', 'threshold'), getattr(self, '_conv_contrast', 1.0),
+                     getattr(self, '_conv_invert', False), getattr(self, '_conv_pxsize', None))
         if cache_key != self._overlay_cache_key:
             rgba = self._make_overlay_image(disp_w, disp_h, thresh, angle)
             self._overlay_tk_cache = ImageTk.PhotoImage(rgba)
@@ -2092,12 +2123,15 @@ class GerberEditor(tk.Tk):
         algorithm_changed(render=False)
 
         sep()
-        lbl("Inversión de imagen")
+        lbl("Qué zonas reciben tinta blanca")
         invert_var = tk.BooleanVar(value=getattr(self, '_conv_invert', False))
-        tk.Checkbutton(left, text="Invertir negro/blanco", variable=invert_var,
-                       bg="#252535", fg="#ddddee", selectcolor="#1a1a2e",
-                       activebackground="#252535", font=control_font,
-                       command=lambda: refresh(fast=False)).pack(anchor="w")
+        for caption, value in (("Claros → tinta blanca (foto positiva)", True),
+                               ("Oscuros → tinta blanca (foto negativa)", False)):
+            tk.Radiobutton(left, text=caption, variable=invert_var, value=value,
+                           bg="#252535", fg="#ddddee", selectcolor="#1a1a2e",
+                           activebackground="#252535", font=control_font,
+                           wraplength=sidebar_width-35, justify="left", anchor="w",
+                           command=lambda: refresh(fast=False)).pack(fill="x")
 
         sep()
         tk.Label(actions, textvariable=value_status, bg="#252535", fg="#ffcc44",
@@ -2117,12 +2151,13 @@ class GerberEditor(tk.Tk):
             self._conv_pxsize = pxsize_var.get()   # tamaño de píxel para dithering
             self._overlay_cache_key = None
             self._redraw()
+            refresh(fast=False)
             messagebox.showinfo("Aplicado",
                 f"Exportación: trazo 0.15mm (JLCPCB)\n"
                 f"Dithering: píxel {pxsize_var.get():.2f}mm · {algo_var.get()}\n"
                 f"Contraste: {contrast_var.get():.2f}", parent=win)
 
-        tk.Button(actions, text="✅ Aplicar a exportación", command=apply_to_main,
+        tk.Button(actions, text="✅ Aplicar a PCB y exportación", command=apply_to_main,
                   bg="#2244aa", fg="white", relief="flat",
                   font=("Segoe UI", 11, "bold"), pady=6).pack(fill="x", pady=(8,2))
         tk.Button(actions, text="Cerrar", command=win.destroy,
@@ -2137,7 +2172,7 @@ class GerberEditor(tk.Tk):
         top_bar.pack(fill="x", pady=(0,4))
         tk.Label(top_bar, text="Original", bg="#1a1a2e", fg="#aaaacc",
                  font=control_font).pack(side="left", padx=8)
-        tk.Label(top_bar, text="Resultado Gerber", bg="#1a1a2e", fg="#ffcc44",
+        tk.Label(top_bar, text="Resultado · tinta blanca", bg="#1a1a2e", fg="#ffcc44",
                  font=control_font).pack(side="right", padx=8)
 
         preview_frame = tk.Frame(right, bg="#1a1a2e")
@@ -2159,7 +2194,7 @@ class GerberEditor(tk.Tk):
         lbl_conv.place(relx=.5, rely=.5, anchor="center")
 
         info_lbl = tk.Label(right, text="", bg="#1a1a2e", fg="#888899",
-                            font=("Segoe UI", 10), width=1, height=2)
+                            font=("Segoe UI", 10), width=1, height=3)
         info_lbl.pack(fill="x", pady=2)
 
         self._conv_refresh_id = None
@@ -2192,74 +2227,35 @@ class GerberEditor(tk.Tk):
                 self._conv_refresh_id = win.after(30, lambda: render(False, '_conv_refresh_id'))
 
         def _render_preview(fast=False):
-            from PIL import Image as PILImg, ImageEnhance, ImageOps
+            from PIL import Image as PILImg, ImageTk as PILImageTk
             import numpy as np
-
-            PW = max(1, min(viewport.winfo_width() for viewport in viewports) - 4)
-            PH = max(1, preview_frame.winfo_height() - 4)
-
-            # Imagen original (rotada si procede)
-            img = self.overlay_image.copy()
-            angle = self.overlay_angle_deg
-            import math as _m
-            if angle % 360 != 0:
-                img = img.rotate(-angle, expand=True, resample=PILImg.BICUBIC)
-
-            # Aplicar contraste/gamma
-            img_enh = img.convert("L")
-            if contrast_var.get() != 1.0:
-                img_enh = ImageEnhance.Contrast(img_enh).enhance(contrast_var.get())
-            if invert_var.get():
-                img_enh = ImageOps.invert(img_enh)
-
-            # Calcular resolución en píxeles basada en tamaño de píxel visual
-            dot = max(self.JLCPCB_MIN_MM, pxsize_var.get())
-            w_mm_r = self.overlay_w_mm; h_mm_r = self.overlay_h_mm
-            if angle % 360 != 0:
-                rad = _m.radians(angle); cv, sv = abs(_m.cos(rad)), abs(_m.sin(rad))
-                w_mm_r, h_mm_r = w_mm_r*cv+h_mm_r*sv, w_mm_r*sv+h_mm_r*cv
-            cols = max(4, int(round(w_mm_r / dot)))
-            rows = max(4, int(round(h_mm_r / dot)))
-
-            # En modo rápido: limitar a 150px y usar umbral simple
-            MAX_FAST = 150; MAX_FULL = 600
-            max_p = MAX_FAST if fast else MAX_FULL
-            if cols > max_p or rows > max_p:
-                f = max_p / max(cols, rows)
-                cols = max(4, int(cols*f)); rows = max(4, int(rows*f))
-
-            small = img_enh.resize((cols, rows), PILImg.BILINEAR if fast else PILImg.LANCZOS)
-            arr = np.array(small, dtype=np.float32)
-
-            algo = algo_var.get()
-            thresh = thresh_var.get()
-
-            # Una sola convención de polaridad en preview y exportación.
-            ink = _raster_ink_mask(arr, algo, thresh)
-            res_img = PILImg.fromarray(np.where(ink, 0, 255).astype(np.uint8)).convert("RGB")
-
-            # Ajustar ambas vistas al espacio disponible, incluso ampliando.
-            # El zoom visual no cambia las medidas físicas ni la resolución Gerber.
-            scale = min(PW / w_mm_r, PH / h_mm_r)
-            display_size = (max(1, int(w_mm_r * scale)), max(1, int(h_mm_r * scale)))
-            orig_disp = img.convert("RGB").resize(display_size, PILImg.LANCZOS)
-            res_img = res_img.resize(display_size, PILImg.NEAREST)
-
-            from PIL import ImageTk as PILImageTk
-            tk_orig = PILImageTk.PhotoImage(orig_disp)
-            tk_conv = PILImageTk.PhotoImage(res_img)
+            PW = max(1, min(viewport.winfo_width() for viewport in viewports)-4)
+            PH = max(1, preview_frame.winfo_height()-4)
+            raster = self._logo_raster(thresh_var.get(), algorithm=algo_var.get(),
+                                      contrast=contrast_var.get(), invert=invert_var.get(),
+                                      pixel_mm=pxsize_var.get(), limit=150 if fast else 600)
+            width, height = raster['width_mm'], raster['height_mm']
+            scale = min(PW/width, PH/height)
+            display_size = (max(1, int(width*scale)), max(1, int(height*scale)))
+            original = raster['original'].convert('RGB').resize(display_size, PILImg.LANCZOS)
+            # Máscara de material: blanco es tinta, negro es placa sin tinta.
+            result = raster['mask'].convert('RGB').resize(display_size, PILImg.NEAREST)
+            tk_orig, tk_conv = PILImageTk.PhotoImage(original), PILImageTk.PhotoImage(result)
             lbl_orig.config(image=tk_orig); lbl_orig.image = tk_orig
             lbl_conv.config(image=tk_conv); lbl_conv.image = tk_conv
-
-            dark_px = int(np.count_nonzero(ink))
-            exp_cols = max(1, int(round(w_mm_r / self.JLCPCB_MIN_MM)))
-            exp_rows = max(1, int(round(h_mm_r / self.JLCPCB_MIN_MM)))
-            px_info.config(text=f"Píxel visual: {dot:.2f}mm → {cols}×{rows} px\n"
+            cols, rows = raster['mask'].size
+            exp_cols, exp_rows = max(1, round(width/self.JLCPCB_MIN_MM)), max(1, round(height/self.JLCPCB_MIN_MM))
+            px_info.config(text=f"Píxel visual: {raster['pixel_mm']:.2f}mm → {cols}×{rows} px\n"
                                  f"Exportación: 0.15mm → {exp_cols}×{exp_rows} px")
-            quality_note = "  ⚡ vista rápida…" if fast else ""
-            info_lbl.config(text=f"Puntos de tinta: {dark_px}  ·  "
-                                  f"Algoritmo: {algo_var.get()}{quality_note}\n"
-                                  "Vista ampliada · Negro = tinta / blanco = sin tinta")
+            applied = (thresh_var.get() == self.overlay_threshold.get()
+                       and algo_var.get() == getattr(self, '_conv_algo', 'threshold')
+                       and contrast_var.get() == getattr(self, '_conv_contrast', 1.0)
+                       and invert_var.get() == getattr(self, '_conv_invert', False)
+                       and pxsize_var.get() == getattr(self, '_conv_pxsize', float(self.entry_dot.get())))
+            state = "Aplicado a PCB y exportación" if applied else "Vista sin aplicar · pulsa Aplicar a PCB y exportación"
+            quality = " · vista rápida" if fast else ""
+            info_lbl.config(text=f"Blanco = tinta · Negro = PCB sin tinta{quality}\n{state}\n"
+                                 f"Puntos de tinta: {np.count_nonzero(np.array(raster['mask']))} · {algo_var.get()}")
 
         # Configure en un Toplevel también recibe los cambios de sus hijos.
         # Escuchar solo el área de preview evita que dibujar dispare otro render.
@@ -2408,8 +2404,11 @@ class GerberEditor(tk.Tk):
         PH = int(gh * scale)
         clearance_px = max(1, int(round(clearance_mm * scale)))
 
-        # Lienzo negro
-        canvas_img = PILImage.new("RGB", (PW, PH), (40, 15, 20))
+        is_silk = ('SILK' in (item['tag']+' '+item['label']).upper()
+                   or item['ext'].lower() in {'.gto', '.gbo'})
+        # Serigrafía física blanca sobre placa negra; cobre conserva su paleta.
+        background = (0, 0, 0) if is_silk else (40, 15, 20)
+        canvas_img = PILImage.new("RGB", (PW, PH), background)
         draw = PILDraw.Draw(canvas_img)
 
         def to_px(xmm, ymm):
@@ -2444,23 +2443,13 @@ class GerberEditor(tk.Tk):
 
         # Imagen del logo binarizada y posicionada
         def logo_mask():
-            thresh = self.overlay_threshold.get()
-            img = self.overlay_image.convert("L")
-            angle = self.overlay_angle_deg
-            w_mm, h_mm = self.overlay_w_mm, self.overlay_h_mm
-            cx = self.overlay_x_mm + w_mm/2
-            cy = self.overlay_y_mm + h_mm/2
-            # Tamaño en px de preview
-            disp_w = max(2, int(w_mm * scale))
-            disp_h = max(2, int(h_mm * scale))
-            small = img.resize((disp_w, disp_h), PILImage.BILINEAR)
-            arr = np.array(small) < thresh
-            mimg = PILImage.fromarray((arr*255).astype(np.uint8), "L")
-            if angle % 360 != 0:
-                mimg = mimg.rotate(-angle, expand=True, resample=PILImage.NEAREST)
-            # Posición: centrado en (cx,cy)
-            mcx, mcy = to_px(cx, cy)
-            return mimg, mcx, mcy
+            raster = self._logo_raster()
+            width = max(1, round(raster['width_mm']*scale))
+            height = max(1, round(raster['height_mm']*scale))
+            mask = raster['mask'].resize((width, height), PILImage.NEAREST)
+            cx = self.overlay_x_mm+self.overlay_w_mm/2
+            cy = self.overlay_y_mm+self.overlay_h_mm/2
+            return mask, *to_px(cx, cy)
 
         mimg, mcx, mcy = logo_mask()
         mw, mh = mimg.size
@@ -2470,7 +2459,11 @@ class GerberEditor(tk.Tk):
         logo_color = (255, 200, 40)   # logo en cobre (dorado brillante)
         base_color = (210, 130, 40)   # trazas en cobre
         pour_color = (150, 80, 30)    # plano de cobre (pour), tono cobre apagado
-        bg = (40, 15, 20)             # board sin cobre (hueco/gap), rojo muy oscuro
+        bg = background
+        if is_silk:
+            logo_color = (255, 255, 255)
+            base_color = (220, 220, 220)
+            pour_color = (160, 160, 160)
 
         if mode == "under":
             # Logo primero, base encima (pour apagado + trazas + logo perforado por base)
@@ -2529,7 +2522,9 @@ class GerberEditor(tk.Tk):
         lbl = tk.Label(win, image=tkimg, bg="#1e1e2e")
         lbl.image = tkimg
         lbl.pack(padx=8, pady=4)
-        tk.Label(win, text="Dorado = logo en cobre  ·  Cobre = plano/trazas  ·  Oscuro = sin cobre (gap)",
+        legend = ("Blanco = tinta de serigrafía · Negro = PCB sin tinta" if is_silk else
+                  "Dorado = logo en cobre · Cobre = plano/trazas · Oscuro = sin cobre (gap)")
+        tk.Label(win, text=legend,
                  bg="#1e1e2e", fg="#aaaacc", font=("Segoe UI", 8)).pack(pady=(0, 4))
 
         def close_preview():
@@ -3172,51 +3167,18 @@ class GerberEditor(tk.Tk):
         return res["v"]
 
     def _export_raster(self, converter, thresh, clearance_mm=0.0):
-        import math as _m
-        from PIL import ImageEnhance, ImageOps
-        try:
-            dot_size = float(self.entry_dot.get())
-        except ValueError:
-            dot_size = 0.15
-
-        w_mm = self.overlay_w_mm
-        h_mm = self.overlay_h_mm
-        cx = self.overlay_x_mm + w_mm / 2
-        cy = self.overlay_y_mm + h_mm / 2
-
-        img = self.overlay_image.copy()
-        angle = self.overlay_angle_deg
-
-        if angle % 360 != 0:
-            img = img.rotate(-angle, expand=True, resample=Image.BICUBIC)
-            rad = _m.radians(angle)
-            c, s = abs(_m.cos(rad)), abs(_m.sin(rad))
-            box_w = w_mm * c + h_mm * s
-            box_h = w_mm * s + h_mm * c
-        else:
-            box_w, box_h = w_mm, h_mm
-
-        x0 = cx - box_w / 2
-        y0 = cy - box_h / 2
-
-        # Aplicar parámetros del editor de conversión si están activos
-        algo = getattr(self, '_conv_algo', 'threshold')
-        contrast = getattr(self, '_conv_contrast', 1.0)
-        invert = getattr(self, '_conv_invert', False)
-        pxsize = getattr(self, '_conv_pxsize', dot_size)  # tamaño píxel para dithering
-
-        img_l = img.convert("L")
-        if contrast != 1.0:
-            img_l = ImageEnhance.Contrast(img_l).enhance(contrast)
-        if invert:
-            img_l = ImageOps.invert(img_l)
-
-        return converter.convert(
-            img_l, x0, y0, box_w, box_h,
-            threshold=thresh, dot_size_mm=dot_size,
-            clearance_mm=clearance_mm, dither_algo=algo,
-            dither_px_mm=pxsize
-        )
+        try: dot_size = max(.15, float(self.entry_dot.get()))
+        except ValueError: dot_size = .15
+        _, gray, width, height = _prepare_logo_image(
+            self.overlay_image, self.overlay_w_mm, self.overlay_h_mm,
+            self.overlay_angle_deg, getattr(self, '_conv_contrast', 1.0),
+            getattr(self, '_conv_invert', False))
+        cx = self.overlay_x_mm + self.overlay_w_mm/2
+        cy = self.overlay_y_mm + self.overlay_h_mm/2
+        return converter.convert(gray, cx-width/2, cy-height/2, width, height,
+            threshold=thresh, dot_size_mm=dot_size, clearance_mm=clearance_mm,
+            dither_algo=getattr(self, '_conv_algo', 'threshold'),
+            dither_px_mm=getattr(self, '_conv_pxsize', dot_size))
 
 
 # ─────────────────────────────────────────────
