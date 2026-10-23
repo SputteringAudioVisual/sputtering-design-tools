@@ -15,6 +15,6 @@ unless(boundp('pcbPowerViaPadMM) pcbPowerViaPadMM = 0.80)
 unless(boundp('pcbPowerViaDrillMM) pcbPowerViaDrillMM = 0.40)
 unless(boundp('pcbPowerNets) pcbPowerNets = '("+12V" "-12V" "0" "GND" "VCC" "VDD"))
 unless(boundp('pcbPreserveCustomRules) pcbPreserveCustomRules = t)
-; nil means <current project directory>/Fabricacion.
-unless(boundp('pcbFabOutputRoot) pcbFabOutputRoot = nil)
+; All output stays INSIDE the saved board's project directory.
+unless(boundp('pcbFabOutputSubdir) pcbFabOutputSubdir = "Fabricacion")
 unless(boundp('pcbFabOutlineLayer) pcbFabOutlineLayer = "BOARD GEOMETRY/DESIGN_OUTLINE")

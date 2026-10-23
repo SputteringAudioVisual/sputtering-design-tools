@@ -15,5 +15,5 @@ pcbPowerViaPadMM = 0.80
 pcbPowerViaDrillMM = 0.40
 pcbPowerNets = '("+12V" "-12V" "0" "GND" "VCC" "VDD")
 pcbPreserveCustomRules = t
-pcbFabOutputRoot = nil
+pcbFabOutputSubdir = "Fabricacion"
 pcbFabOutlineLayer = "BOARD GEOMETRY/DESIGN_OUTLINE"

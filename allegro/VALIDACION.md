@@ -1,4 +1,16 @@
-# Validación de la versión inicial
+# Validación
+
+## Versión 0.2.0: instalación única y ZIP dentro del proyecto
+
+Las seis pruebas automatizadas del empaquetador con Windows PowerShell 5.1 pasan: ruta con espacios y `ñ` e integridad SHA-256, protección de un ZIP existente, ausencia de un Gerber, archivo truncado, resultado de exportación con errores e invocación desde el shell de Windows con rutas entrecomilladas. También pasa la prueba de instalación: conservación de código de inicio ajeno y de sus bytes originales, conservación del perfil local y respaldo de los scripts antiguos antes de convertirlos en redirecciones.
+
+La prueba nativa `tests/project_zip.il` termina en **`ALL_PASS t` / `RESULT (t)`** con Allegro 17.2 P028. Abre una copia de una PCB, cambia deliberadamente la carpeta de trabajo fuera de su proyecto y comprueba auditoría y corrección de máscara, ubicación del backup, conservación de la ruta original del diseño, dos ZIP consecutivos (`v001`, `v002`), restauración de la carpeta de trabajo, carga de la configuración exportada y rechazo de rutas absolutas o con `..`.
+
+La resolución de la placa utiliza `axlGetDrawingName()`, que devuelve su ruta absoluta; `axlCurrentDesign()` solo devuelve el nombre de la ventana y no sirve para determinar la carpeta del proyecto.
+
+El backup de máscara utiliza `axlSaveDesign(... ?writeModel t)` para escribir una copia sin cambiar la ruta de la placa activa. Renombrar únicamente el título no restaura esa asociación. El empaquetador se ejecuta de forma síncrona mediante `system`, para comprobar su código de salida y la existencia del ZIP antes de comunicar el resultado.
+
+## Versión 0.1.0: validación inicial
 
 Fecha: 23 de octubre de 2026. Entorno: Cadence Allegro PCB Editor 17.2 P028, Windows, ejecución nativa sin interfaz gráfica. Se utilizaron copias desechables de dos diseños distintos de dos capas y una tercera placa de prueba con fallos de máscara introducidos deliberadamente. Los originales no se modificaron.
 
@@ -23,7 +35,7 @@ Fecha: 23 de octubre de 2026. Entorno: Cadence Allegro PCB Editor 17.2 P028, Win
 
 ## Avisos y límites
 
-Los tres procesos de artwork terminaron con código de **avisos (1)**; el taladrado terminó sin avisos. Entre los avisos de las placas figuran DRC desactualizados y pads nulos en algunas definiciones. El exportador conserva los archivos, comunica los resultados y devuelve `nil` en lugar de anunciar una exportación sin avisos. Estos ensayos no certifican que esas placas estén listas para fabricar.
+Los tres procesos de artwork terminaron con código de **avisos (1)**; el taladrado terminó sin avisos. Entre los avisos de las placas figuran DRC desactualizados y pads nulos en algunas definiciones. En la versión 0.1.0 el exportador conservaba los archivos y devolvía `nil` ante avisos. Desde 0.2.0 crea además el ZIP si los archivos están completos y marca los avisos explícitamente en el manifiesto. Estos ensayos no certifican que esas placas estén listas para fabricar.
 
 No se ha certificado visualmente la salida en un visor CAM ni se ha fabricado una placa con esta versión. Tampoco se han validado placas multicapa, planos negativos, padstacks avanzados o todos los mecanismos de herencia de restricciones. El exportador rechaza estructuras fuera de su alcance documentado. La conservación de reglas especiales se comprobó con una asignación directa a una red; la búsqueda por grupos ascendientes requiere revisión en proyectos que utilicen esa organización.
 

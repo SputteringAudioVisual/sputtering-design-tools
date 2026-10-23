@@ -32,15 +32,20 @@ procedure(pcbFabCapas()
 )
 
 procedure(pcbFabNuevaCarpeta()
-  let((base carpeta indice raiz)
-    raiz = if(pcbFabOutputRoot then pcbFabOutputRoot else strcat(getWorkingDir() "/Fabricacion"))
+  let((base carpeta indice raiz partes nombre directorio char)
+    nombre = pcbProyectoNombre()
+    base = ""
+    for(i 1 strlen(nombre)
+      char=substring(nombre i 1)
+      base=strcat(base if(rexMatchp("^[A-Za-z0-9_-]$" char) then char else "_")))
+    unless(strlen(base)>0 base="PCB")
+    raiz = pcbProyectoRutaSalida(pcbFabOutputSubdir)
     createDirHier(raiz)
-    base = sprintf(nil "%s/PCB_FAB" raiz)
-    carpeta = base
     indice = 1
-    while(isDir(carpeta)
-      carpeta = sprintf(nil "%s_%d" base indice)
+    carpeta = sprintf(nil "%s/%s_fab_v%03d" raiz base indice)
+    while(isDir(carpeta) || isFile(strcat(carpeta ".zip"))
       indice = indice + 1
+      carpeta = sprintf(nil "%s/%s_fab_v%03d" raiz base indice)
     )
     if(createDirHier(carpeta) then carpeta else nil)
   )
@@ -214,14 +219,46 @@ procedure(pcbFabExportarWorker()
   )
 )
 
+procedure(pcbFabComprimir(carpeta estados)
+  prog((f helper comando previo resultado ejecutable)
+    helper=strcat(pcbToolsRoot "/pcb_empaquetar.ps1")
+    unless(isFile(helper) error("PCB: falta el empaquetador %s." helper))
+    when(rexMatchp("[\"%]" helper) error("PCB: ruta del empaquetador no compatible."))
+    f=outfile(strcat(carpeta "/pcb_export_info.txt") "w")
+    unless(f error("No se pudo escribir la informacion del paquete."))
+    fprintf(f "tools_version=%s\n" pcbToolsVersion)
+    fprintf(f "artwork_status=%d\n" if(car(estados)==t then 0 else car(estados)))
+    fprintf(f "ncdrill_status=%d\n" if(cadr(estados)==t then 0 else cadr(estados)))
+    close(f)
+    ejecutable=strcat(getShellEnvVar("SystemRoot") "/System32/WindowsPowerShell/v1.0/powershell.exe")
+    ; system waits for this non-Cadence process and preserves its exit code.
+    ; The outer quotes implement Windows cmd.exe /c quoting for an exe path.
+    comando=sprintf(nil "\"\"%s\" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File \"%s\" -Directory \"%s\" > \"%s/pcb_zip.log\" 2>&1\"" ejecutable helper carpeta carpeta)
+    previo=getWorkingDir()
+    resultado=errset(progn(
+      changeWorkingDir(carpeta)
+      system(comando)) t)
+    changeWorkingDir(previo)
+    unless(resultado && car(resultado)==0 && isFile(strcat(carpeta ".zip"))
+      printf("PCB FAB: resultado del empaquetador %L\n" resultado)
+      printf("PCB FAB: no se pudo crear el ZIP. Los archivos siguen en %s\n" carpeta)
+      return(nil))
+    return(strcat(carpeta ".zip"))
+  )
+)
+
 procedure(pcbFabExportar()
-  prog((carpeta anterior ncdAnterior resultado estados)
+  prog((carpeta anterior ncdAnterior resultado estados zip)
     pcbFabLastResult = nil
+    pcbFabLastZip = nil
+    ; Resolve and validate the saved project before changing films or writing.
+    pcbProyectoRutaSalida(pcbFabOutputSubdir)
     unless(pcbFabConfigurar() return(nil))
     carpeta = pcbFabNuevaCarpeta()
     unless(carpeta error("No se pudo crear la carpeta de salida."))
     unless(pcbFabEscribirArtParam(carpeta) && pcbFabEscribirNcParam(carpeta)
       error("No se pudieron escribir los parametros de fabricacion."))
+    pcbProyectoGuardarConfiguracion(carpeta)
     anterior = getWorkingDir()
     ncdAnterior = getShellEnvVar("NCDPATH")
     resultado = errset(progn(
@@ -235,11 +272,18 @@ procedure(pcbFabExportar()
     unless(resultado printf("PCB FAB: ERROR de exportacion; revisa los logs.\n") return(nil))
     estados = car(resultado)
     pcbFabLastResult = list(carpeta car(estados) cadr(estados))
-    unless(car(estados) == t && cadr(estados) == t
-      printf("PCB FAB: resultado Gerber %L; taladro %L. Revisa errores/avisos.\n" car(estados) cadr(estados))
+    unless(member(car(estados) '(t 1)) && member(cadr(estados) '(t 1))
+      printf("PCB FAB: ERROR Gerber %L; taladro %L. No se crea un ZIP de fabricacion.\n" car(estados) cadr(estados))
       return(nil))
-    printf("PCB FAB: procesos finalizados sin avisos. Comprueba los archivos en un visor CAM.\n")
-    return(carpeta)
+    zip=pcbFabComprimir(carpeta estados)
+    unless(zip return(nil))
+    pcbFabLastZip=zip
+    printf("PCB FAB: ZIP %s\n" zip)
+    if(car(estados)==t && cadr(estados)==t then
+      printf("PCB FAB: procesos finalizados sin avisos. Comprueba el paquete en un visor CAM.\n")
+    else
+      printf("PCB FAB: PAQUETE CON AVISOS: Gerber %L; taladro %L. Revisa el informe dentro del ZIP.\n" car(estados) cadr(estados)))
+    return(zip)
   )
 )
 

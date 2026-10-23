@@ -55,6 +55,7 @@ procedure(pcbTestRun()
     ncd = getShellEnvVar("NCDPATH")
     resultado = pcbFabExportar()
     pcbTestLog("FAB_EXPORT" resultado)
+    pcbTestAssert(resultado && isFile(resultado) && equal(resultado pcbFabLastZip) "ZIP versionado")
     pcbTestAssert(equal(cwd getWorkingDir()) && equal(ncd getShellEnvVar("NCDPATH")) "entorno restaurado")
     estados = pcbFabLastResult
     pcbTestLog("FAB_STATUS" estados)
