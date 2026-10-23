@@ -196,7 +196,8 @@ class PanelEditor(tk.Tk):
         self.pcb_info.config(text=(f'PCB: {b[2]-b[0]:.2f} × {b[3]-b[1]:.2f} mm\n'
                                   'Posición compartida por todas las capas.' if b else 'Carga Gerber sueltos o un ZIP.'))
         self.warning.config(text='\n'.join(d.problems()[:3]))
-        self.title(('● ' if self.dirty else '') + 'Sputtering Design Tools · Frontal Eurorack 3U')
+        name = Path(self.project_path).name if self.project_path else 'Sin guardar'
+        self.title(('● ' if self.dirty else '') + f'Sputtering Design Tools · {name} · Frontal Eurorack 3U')
         self.draw()
 
     def load_pcb(self):
