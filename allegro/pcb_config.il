@@ -1,0 +1,20 @@
+; Allegro PCB Editor 17.2 - defaults in millimeters.
+; Load personal overrides BEFORE pcbCargar(). Reloading preserves overrides.
+unless(boundp('pcbTextHeightMM) pcbTextHeightMM = 0.79)
+unless(boundp('pcbTextWidthMM) pcbTextWidthMM = 0.58)
+unless(boundp('pcbTextStrokeMM) pcbTextStrokeMM = 0.15)
+unless(boundp('pcbTextCharSpaceMM) pcbTextCharSpaceMM = 0.15)
+unless(boundp('pcbTextLineSpaceMM) pcbTextLineSpaceMM = 0.79)
+unless(boundp('pcbTextRemoveValues) pcbTextRemoveValues = t)
+unless(boundp('pcbMaskMarginMM) pcbMaskMarginMM = 0.0)
+unless(boundp('pcbSignalWidthMM) pcbSignalWidthMM = 0.40)
+unless(boundp('pcbPowerWidthMM) pcbPowerWidthMM = 0.80)
+unless(boundp('pcbSignalViaPadMM) pcbSignalViaPadMM = 0.60)
+unless(boundp('pcbSignalViaDrillMM) pcbSignalViaDrillMM = 0.30)
+unless(boundp('pcbPowerViaPadMM) pcbPowerViaPadMM = 0.80)
+unless(boundp('pcbPowerViaDrillMM) pcbPowerViaDrillMM = 0.40)
+unless(boundp('pcbPowerNets) pcbPowerNets = '("+12V" "-12V" "0" "GND" "VCC" "VDD"))
+unless(boundp('pcbPreserveCustomRules) pcbPreserveCustomRules = t)
+; nil means <current project directory>/Fabricacion.
+unless(boundp('pcbFabOutputRoot) pcbFabOutputRoot = nil)
+unless(boundp('pcbFabOutlineLayer) pcbFabOutlineLayer = "BOARD GEOMETRY/DESIGN_OUTLINE")

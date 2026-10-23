@@ -8,6 +8,12 @@ La primera versión incorpora el editor Gerber existente, sin modificar su códi
 
 Esta incorporación establece el punto de partida del control de versiones. Todavía no se dispone de planos para validar el funcionamiento real; las correcciones e interfaz se abordarán en cambios posteriores.
 
+## Utilidades de Allegro
+
+La carpeta [allegro](allegro/README.md) incorpora comandos SKILL para Allegro PCB Editor 17.2: normalización de referencias de serigrafía, máscara de pines y vías, reglas de anchos y exportación de fabricación para placas de dos capas. Los nombres `pcb_*` y los perfiles configurables permiten usarlos en diferentes proyectos.
+
+La instalación, los comandos, los valores predeterminados y las limitaciones están documentados en [allegro/README.md](allegro/README.md). El código del editor Gerber permanece intacto.
+
 ## Ejecución del editor actual
 
 Requiere Python con Tkinter, Pillow y NumPy:
