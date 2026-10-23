@@ -1422,6 +1422,8 @@ class GerberEditor(tk.Tk):
 
     def _draw_layer_entry(self, entry, fast=False):
         layer = entry["layer"]
+        if not layer.drawables:
+            return
         color = entry["color"]
         dim = self._dim_color(color)        # tono apagado para el plano de masa
         scale = self._get_mm_scale()
@@ -1873,7 +1875,7 @@ class GerberEditor(tk.Tk):
         """Bounding box union de todas las capas visibles."""
         xs, ys = [], []
         for entry in self.gerber_layers:
-            if entry["var_visible"].get():
+            if entry["var_visible"].get() and entry["layer"].drawables:
                 b = entry["layer"].bounds
                 xs += [b[0], b[2]]; ys += [b[1], b[3]]
         if xs:
