@@ -9,12 +9,14 @@ from xml.sax.saxutils import escape
 import zipfile
 
 from gerber_silkscreen_editor import GerberLayer
+from drill import DrillLayer, parameter_format
 
 HEIGHT_MM = 128.5
 HP_MM = 5.08
 SCHEMA = "sputtering.front-panel.v1"
 GERBER_EXTENSIONS = {'.gbr', '.ger', '.art', '.gto', '.gbo', '.gko', '.gm1',
                      '.gtl', '.gbl', '.gts', '.gbs', '.pho'}
+DRILL_EXTENSIONS = {'.drl', '.xln', '.exc'}
 
 
 def number(value, minimum=None, maximum=None):
@@ -65,9 +67,14 @@ class Reference:
     name: str
     content: str
     visible: bool = True
+    coord_format: tuple = None
     layer: GerberLayer = field(init=False, repr=False)
 
     def __post_init__(self):
+        if Path(self.name).suffix.lower() in DRILL_EXTENSIONS:
+            self.layer = DrillLayer(self.content, self.coord_format)
+            self.coord_format = self.layer.format_x
+            return
         # Do not silently display unsupported constructs at misleading dimensions.
         unsupported = [
             (r'%\s*AM', 'macros de apertura'), (r'%\s*SR(?!\s*\*)', 'repetición de bloques'),
@@ -113,28 +120,42 @@ class Reference:
         self.layer.bounds = geometry_bounds(self.layer)
 
     def serialise(self):
-        return {'name': self.name, 'content': self.content, 'visible': self.visible}
+        return {'name': self.name, 'content': self.content, 'visible': self.visible,
+                'coord_format': list(self.coord_format) if self.coord_format else None}
 
 
 def load_references(paths):
     references, errors = [], []
+    explicit_params = next((Path(p) for p in paths if Path(p).name.lower() == 'nc_param.txt'), None)
     for path in paths:
         path = Path(path)
+        if path.name.lower() == 'nc_param.txt':
+            continue
         try:
             if path.suffix.lower() == '.zip':
                 with zipfile.ZipFile(path) as archive:
                     for member in archive.infolist():
-                        if member.is_dir() or Path(member.filename).suffix.lower() not in GERBER_EXTENSIONS:
+                        if member.is_dir() or Path(member.filename).suffix.lower() not in GERBER_EXTENSIONS | DRILL_EXTENSIONS:
                             continue
                         if member.file_size > 30_000_000:
                             errors.append(f"{member.filename}: supera 30 MB.")
                             continue
                         try:
-                            references.append(Reference(member.filename, archive.read(member).decode('utf-8-sig')))
+                            fmt = None
+                            if Path(member.filename).suffix.lower() in DRILL_EXTENSIONS:
+                                params_name = str(Path(member.filename).with_name('nc_param.txt')).replace('\\', '/')
+                                if params_name in archive.namelist():
+                                    fmt = parameter_format(archive.read(params_name).decode('utf-8-sig'))
+                            references.append(Reference(member.filename, archive.read(member).decode('utf-8-sig'), coord_format=fmt))
                         except (ValueError, UnicodeError) as error:
                             errors.append(str(error))
             else:
-                references.append(Reference(path.name, path.read_text(encoding='utf-8-sig')))
+                fmt = None
+                if path.suffix.lower() in DRILL_EXTENSIONS:
+                    params = explicit_params or path.with_name('nc_param.txt')
+                    if params.exists():
+                        fmt = parameter_format(params.read_text(encoding='utf-8-sig'))
+                references.append(Reference(path.name, path.read_text(encoding='utf-8-sig'), coord_format=fmt))
         except (OSError, ValueError, zipfile.BadZipFile) as error:
             errors.append(f"{path.name}: {error}")
     return references, errors
