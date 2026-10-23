@@ -55,6 +55,9 @@ class GerberLayer:
     def _parse(self):
         """Parseo básico: extrae formato, unidades y primitivas de dibujo."""
         self.drawables = []
+        self.used_apertures = set()
+        self.unit = "MM"
+        last_op = 2
         coords = []
         current_x, current_y = 0.0, 0.0
         current_aperture = 10
@@ -73,7 +76,7 @@ class GerberLayer:
         header_done = False
 
         for raw in tokens:
-            cmd = raw.strip().lstrip('%')
+            cmd = raw.replace('%', '').strip()
 
             # Formato de coordenadas
             m = re.match(r'FSLA?X(\d)(\d)Y(\d)(\d)', cmd)
@@ -97,14 +100,17 @@ class GerberLayer:
                 shape = m.group(2)
                 sizes = [float(s) for s in m.group(3).split('X') if s]
                 sx = sizes[0] if sizes else 0.1
-                sy = sizes[1] if len(sizes) > 1 else sx
+                sy = sizes[1] if len(sizes) > 1 and shape != 'C' else sx
+                if self.unit == "IN":
+                    sx *= 25.4
+                    sy *= 25.4
                 apertures[code] = (shape, sx, sy)
                 self.used_apertures.add(code)
                 continue
 
             # Selección de apertura
-            m = re.match(r'D(\d+)$', cmd)
-            if m:
+            m = re.fullmatch(r'(?:G54)?D(\d+)', cmd)
+            if m and int(m.group(1)) >= 10:
                 current_aperture = int(m.group(1))
                 continue
 
@@ -141,13 +147,14 @@ class GerberLayer:
                 arc_mode = 3
 
             # Movimiento / flash / draw (acepta prefijo G01/G02/G03)
-            m = re.match(r'(?:G0[0123])?(X([+-]?\d+))?(Y([+-]?\d+))?(I([+-]?\d+))?(J([+-]?\d+))?D0?([123])', cmd)
-            if m:
+            m = re.fullmatch(r'(?:G0[0123])?(X([+-]?\d+))?(Y([+-]?\d+))?(I([+-]?\d+))?(J([+-]?\d+))?(?:D0?([123]))?', cmd)
+            if m and any(m.group(n) is not None for n in (2, 4, 6, 8, 9)):
                 raw_x = m.group(2)
                 raw_y = m.group(4)
                 raw_i = m.group(6)
                 raw_j = m.group(8)
-                op = int(m.group(9))
+                op = int(m.group(9)) if m.group(9) else last_op
+                last_op = op
 
                 prev_x, prev_y = current_x, current_y
                 if raw_x is not None:
