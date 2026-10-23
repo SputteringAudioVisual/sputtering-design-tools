@@ -59,6 +59,18 @@ class GeometryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 Reference('unsupported.gbr', content)
 
+    def test_allegro_grouped_identity_transforms(self):
+        identity = '%IR0*IPPOS*OFA0.00000B0.00000*MIA0B0*SFA1.00000B1.00000*%\n'
+        self.assertEqual(len(Reference('allegro.art', identity+BOARD).layer.drawables), 4)
+        for bad in ('OFA1B0', 'MIA1B0', 'SFA2B1', 'IR90', 'IPNEG'):
+            with self.assertRaises(ValueError):
+                Reference('bad.art', '%IR0*'+bad+'*%\n'+BOARD)
+
+    def test_circular_aperture_hole_does_not_change_outer_diameter(self):
+        ref = Reference('flash.gbr', '%FSLAX36Y36*%\n%MOMM*%\n%ADD10C,2X0.5*%\nD10*\nX0Y0D03*\nM02*')
+        self.assertEqual(ref.layer.drawables[0]['sx'], 2)
+        self.assertEqual(ref.layer.drawables[0]['sy'], 2)
+
     def test_validated_dimensions(self):
         self.assertEqual(PanelDocument(hp='12', gap='0,34').width, 60.62)
         for hp in ('nan', 'inf', '12.5', '-1', '0'):
