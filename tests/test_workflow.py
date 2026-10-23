@@ -500,6 +500,46 @@ class OriginalWorkflowTests(unittest.TestCase):
             self.assertEqual(drills.coord_format, (5, 5))
             self.assertEqual(len(drills.layer.drawables), 2)
 
+    def test_clip_tracks_manual_moves_in_main_view_and_keeps_export_placement(self):
+        from PIL import Image
+        import numpy as np
+        self.app.overlay_image = Image.new('RGB',(40,20),'black')
+        self.app.overlay_w_mm,self.app.overlay_h_mm = 4,2
+        self.app.overlay_x_mm,self.app.overlay_y_mm = 38,0
+        self.app.overlay_angle_deg = 0
+        before = self.app._make_overlay_image(400,200,128,0)
+        self.assertEqual(before.getpixel((100,100))[3],255)
+        self.assertEqual(before.getpixel((300,100))[3],0)
+        self.app.overlay_x_mm = 39
+        after = self.app._make_overlay_image(400,200,128,0)
+        self.assertEqual(after.getpixel((50,100))[3],255)
+        self.assertEqual(after.getpixel((150,100))[3],0)
+        layer = GerberLayer()
+        commands = self.app._build_logo_cmds(ImageToGerber(layer),128)
+        self.assertIn('%LPC*%',commands)
+        self.assertEqual((self.app.overlay_x_mm,self.app.overlay_y_mm),(39,0))
+        self.assertEqual((self.app.overlay_w_mm,self.app.overlay_h_mm),(4,2))
+        self.app.overlay_angle_deg=90
+        rotated=self.app._make_overlay_image(400,200,128,90)
+        self.assertTrue(np.asarray(rotated)[:,:,3].any())
+        self.app.overlay_x_mm=100
+        self.assertFalse(np.asarray(self.app._make_overlay_image(400,200,128,90))[:,:,3].any())
+
+    def test_vector_export_also_clips_without_changing_its_origin(self):
+        from PIL import Image
+        self.app.overlay_image=Image.new('RGB',(20,20),'black')
+        self.app.overlay_image_path='artwork.svg'
+        self.app.overlay_svg_path='artwork.svg'
+        self.app.overlay_x_mm,self.app.overlay_y_mm=39,0
+        self.app.overlay_w_mm,self.app.overlay_h_mm=4,2
+        self.app.overlay_angle_deg=0
+        converter=ImageToGerber(GerberLayer())
+        with patch('gerber_silkscreen_editor.SVG_AVAILABLE',True), \
+             patch.object(converter,'convert_svg_paths',return_value=['G01*','%ADD90C,0.15*%','D90*','X39000000Y0D02*','X43000000Y0D01*']) as vector:
+            commands=self.app._build_logo_cmds(converter,128)
+            self.assertEqual(vector.call_args.args,('artwork.svg',39,0,4,2))
+            self.assertIn('%LPC*%',commands)
+
     def test_main_view_and_export_use_the_conversion_mask_for_all_settings(self):
         from PIL import Image, ImageTk
         import numpy as np
@@ -518,7 +558,8 @@ class OriginalWorkflowTests(unittest.TestCase):
                     def capture(gray, x, y, width, height, **settings):
                         return _image_ink_mask(gray, width, height, settings['dither_px_mm'],
                                                settings['dither_algo'], settings['threshold'])
-                    with patch.object(converter, 'convert', side_effect=capture):
+                    with patch.object(converter, 'convert', side_effect=capture), \
+                         patch.object(self.app, '_clip_logo_commands', side_effect=lambda commands, layer: commands):
                         exported_mask = self.app._export_raster(converter, 173)
                     np.testing.assert_array_equal(exported_mask, np.array(raster['mask'])>0)
                     self.app._redraw()
@@ -567,6 +608,8 @@ class OriginalWorkflowTests(unittest.TestCase):
             self.assertTrue(layer.drawables)
             middle = self.app.overlay_x_mm+self.app.overlay_w_mm/2
             for drawable in layer.drawables:
+                if drawable['polarity'] != 'dark' or drawable['type'] != 'line':
+                    continue
                 self.assertGreaterEqual(drawable['x1'], middle)
                 self.assertGreaterEqual(drawable['x2'], middle)
 
