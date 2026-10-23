@@ -4,7 +4,11 @@
 
 El usuario confirmó que `pcb_mascara_revisar` ya responde con 0.2.1, pero `pcb_utilidades_info` seguía sin mostrar salida en su sesión. La información utiliza ahora `axlUIWPrint(nil ...)`, que escribe directamente en la ventana principal sin depender del búfer de `printf`. Se incorpora el alias `pcb_info` y se conserva `pcb_utilidades_info`.
 
-La prueba nativa en Allegro 17.2 P028 ejecutó ambos nombres desde el intérprete y comprobó sus alias, la versión y la función directa: **`INFO_ALIASES_PASS 0.2.2`**. Los tres mensajes informativos aparecen completos en la salida del proceso para ambas llamadas. La prueba no modifica la placa. Falta confirmar el resultado visual en la sesión del usuario; el silencio original no se ha reproducido sin interfaz gráfica.
+La prueba nativa en Allegro 17.2 P028 ejecutó ambos nombres desde el intérprete y comprobó sus alias, la versión y la función directa: **`INFO_ALIASES_PASS 0.2.2`**. Los tres mensajes informativos aparecen completos en la salida del proceso para ambas llamadas. La prueba no modifica la placa. Posteriormente, el usuario confirmó en su sesión gráfica la recarga 0.2.2 y la salida completa de `pcb_info`.
+
+El usuario ejecutó además `pcb_fab_auditar` y `pcb_fab_exportar`: generó el paquete **v003** dentro del proyecto con manifiesto 0.2.2. Se comprobó la estructura de siete Gerber y un archivo de taladrado completos y la integridad SHA-256 de todas las entradas incluidas en el manifiesto del ZIP. Artwork devolvió avisos (1); el taladrado terminó correctamente (0). El manifiesto conserva `REQUIERE_REVISION_AVISOS`.
+
+En esa placa, los avisos de artwork son DRC desactualizados y ocho ubicaciones de un padstack sin pad regular en TOP/BOTTOM. NC Drill generó automáticamente su tabla de herramientas. Estos hallazgos pertenecen a la placa probada; no se han corregido ni se consideran aprobación para fabricar. No se publican sus archivos ni rutas personales en el repositorio.
 
 ## Versión 0.2.1: ejecución de los nombres cortos
 
@@ -63,7 +67,7 @@ No se ha certificado visualmente la salida en un visor CAM ni se ha fabricado un
 4. Ejecuta la comprobación estructural, sin dependencias adicionales:
 
 ```powershell
-python tests/verify_exports.py "ruta/a/Fabricacion/PCB_FAB"
+python tests/verify_exports.py "ruta/a/Fabricacion/mi_placa_fab_v001"
 ```
 
 Este último paso verifica cabeceras, formato y cierre de los archivos; no sustituye una inspección CAM ni los DRC de la placa.

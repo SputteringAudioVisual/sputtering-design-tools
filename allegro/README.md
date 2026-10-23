@@ -1,45 +1,21 @@
 # Utilidades PCB para Cadence Allegro
 
-Comandos SKILL reutilizables para preparar serigrafía, máscara, reglas de pistas y archivos de fabricación. Destinados a **Allegro PCB Editor 17.2 en Windows**. No dependen del nombre de la placa ni de una carpeta personal.
+Comandos SKILL reutilizables para preparar serigrafía, máscara, reglas de pistas y archivos de fabricación. Versión **0.2.2**, destinada a **Allegro PCB Editor 17.2 en Windows**. No dependen del nombre de la placa ni de una carpeta personal.
 
-## Instalación y carga
+## Por dónde empezar
 
-La instalación estándar única es **`C:/SPB_Data/pcbenv/pcb_tools`**. Para instalar desde esta carpeta en otro PC Windows:
+- **[Guía de uso paso a paso](COMO_USAR.md):** instalación, carga, comandos, perfiles, exportación y solución de problemas.
+- **Esta página:** referencia del comportamiento, valores iniciales y limitaciones.
+- **[Validación](VALIDACION.md):** pruebas realizadas, confirmación en sesión gráfica y límites pendientes.
+- **[Perfil de ejemplo](config_ejemplo.il):** configuración editable para otro proyecto.
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\Instalar-PcbTools.ps1
-```
+La única instalación de trabajo es **`C:/SPB_Data/pcbenv/pcb_tools`**. El código mantenido en GitHub está únicamente en `allegro/`; los nombres anteriores `fx_*` son alias de compatibilidad hacia las mismas funciones.
 
-El instalador copia tanto SKILL como el empaquetador ZIP, conserva copias previas y actualiza `allegro.ilinit` sin sustituir otras configuraciones. Los perfiles locales `pcb_local.il` se conservan. El parámetro de política de ejecución afecta solo al proceso que ejecuta los scripts locales; no cambia la configuración permanente de Windows.
+El cargador registra los comandos sin modificar la placa. Los cambios se revisan en Allegro y se guardan con **File > Save**. Los informes, backups y paquetes de fabricación quedan junto al `.brd`, dentro de su proyecto.
 
-Al reiniciar Allegro, los comandos se cargan automáticamente. Para cargar o actualizar la sesión actual, escribe una sola línea en **Command**:
+## Configuración
 
-```lisp
-skill load("C:/SPB_Data/pcbenv/pcb_tools/pcb_cargar.il")
-```
-
-El comando `pcb_info` muestra la versión y la carpeta activa; `pcb_utilidades_info` sigue disponible como sinónimo. El informe usa la salida directa de la consola de Allegro. Usa siempre el cargador estándar, sin tildes ni `ñ`; las carpetas de pruebas y las copias de desarrollo no son instalaciones para trabajar. Al cargar solo se registran comandos: no se modifica la placa automáticamente.
-
-Desde 0.2.1, los nombres de la tabla siguiente son alias nativos que llaman a `skill funcion()`, la misma entrada que las llamadas directas. La carga retira los antiguos registros `axlCmdRegister` de estas utilidades y verifica los alias. Esto evita depender de esos callbacks en sesiones donde algunos nombres no mostraban resultado aunque las llamadas directas sí funcionaban. La ruta y las operaciones sobre la placa son las mismas.
-
-Para personalizar una placa, copia `config_ejemplo.il`, ajusta sus valores y cárgalo antes de ejecutar un comando. También puede cargarse antes de `pcbCargar`. Los valores se conservan al recargar el paquete. Las dimensiones de configuración siempre son milímetros; la conversión a unidades del diseño es automática.
-
-## Comandos
-
-| Comando | Acción |
-| --- | --- |
-| `pcb_textos_auditar` | Informa de las referencias, duplicados y textos asociados que se modificarían. |
-| `pcb_textos` | Conserva una referencia por componente, la lleva a la serigrafía de su cara y normaliza sus dimensiones. |
-| `pcb_mascara_revisar` | Revisa aberturas de pines y vías; guarda `pcb_mascara_revision.txt` junto a la PCB. |
-| `pcb_mascara` | Abre máscara sobre pads de componentes y elimina aberturas propias de vías; crea una copia de seguridad previa. |
-| `pcb_anchos_auditar` | Cuenta redes de señal, alimentación y redes con reglas especiales que se conservarán. |
-| `pcb_anchos` | Asigna reglas físicas de señal y alimentación para el trazado posterior. |
-| `pcb_fab_auditar` | Comprueba si existen las capas necesarias y si la estructura es compatible con este exportador. |
-| `pcb_fab_configurar` | Crea o reemplaza los siete films de fabricación descritos abajo. |
-| `pcb_fab_exportar` | Genera Gerber, NC Drill y un ZIP con versión dentro del proyecto. |
-| `pcb_info` | Muestra la versión y la ruta única que se está utilizando. |
-
-Comienza por la auditoría correspondiente. Los cambios de textos, máscara, reglas y films quedan **en memoria**: revisa y guarda la placa en Allegro. No se añaden pistas, vías ni conexiones de tierra. Guarda una copia antes de usar estas herramientas en otro diseño.
+Las dimensiones de configuración siempre son milímetros; la conversión a unidades del diseño es automática. Los valores iniciales están en [pcb_config.il](pcb_config.il) y solo se asignan si la variable aún no está definida. Un perfil cargado conserva sus valores al recargar el paquete, salvo que `pcb_local.il` vuelva a establecerlos. Para aplicar otro perfil o volver a los valores iniciales, carga explícitamente el perfil completo correspondiente; cambiar de placa no selecciona un perfil automáticamente.
 
 ## Serigrafía
 
