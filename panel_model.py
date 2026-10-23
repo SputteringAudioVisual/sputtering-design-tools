@@ -117,7 +117,18 @@ class Reference:
         self.layer = GerberLayer()
         self.layer.raw_lines = self.content.splitlines(keepends=True)
         self.layer._parse()
-        self.layer.bounds = geometry_bounds(self.layer)
+        if self.layer.drawables:
+            self.layer.bounds = geometry_bounds(self.layer)
+        else:
+            # Una serigrafía exportada vacía sigue siendo un destino Gerber válido.
+            # Aceptar solo un cuerpo de configuración/fin, nunca geometría ignorada.
+            body = re.sub(r'G0?4[^*]*\*', '', self.content)
+            body = re.sub(r'%[^%]*%', '', body)
+            commands = [command.strip() for command in body.split('*') if command.strip()]
+            if (not commands or commands[-1] not in {'M02', 'M2'} or
+                    any(not re.fullmatch(r'M0?2|G0?1|G75|D\d+', command) for command in commands)):
+                raise ValueError(f'{self.name}: la capa vacía contiene comandos no reconocidos o está incompleta.')
+            self.layer.bounds = None
 
     def serialise(self):
         return {'name': self.name, 'content': self.content, 'visible': self.visible,
