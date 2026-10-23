@@ -1926,7 +1926,7 @@ class GerberEditor(tk.Tk):
             tk.Radiobutton(left, text=txt, variable=algo_var, value=val,
                            bg="#252535", fg="#ddddee", selectcolor="#1a1a2e",
                            activebackground="#252535", font=("Segoe UI", 8),
-                           anchor="w", command=lambda: win.after(50, refresh)
+                           anchor="w", command=lambda: refresh(fast=True)
                            ).pack(fill="x", padx=4)
 
         sep()
@@ -1965,7 +1965,7 @@ class GerberEditor(tk.Tk):
                             bg="#252535", fg="white", troughcolor="#1a1a2e",
                             highlightthickness=0, command=lambda v: refresh(fast=True))
         px_scale.pack(fill="x")
-        px_info = tk.Label(left, text="", bg="#252535", fg="#ffcc44", font=("Segoe UI", 8))
+        px_info = tk.Label(left, text="", height=2, bg="#252535", fg="#ffcc44", font=("Segoe UI", 8))
         px_info.pack()
 
         sep()
@@ -2023,53 +2023,60 @@ class GerberEditor(tk.Tk):
         preview_frame = tk.Frame(right, bg="#1a1a2e")
         preview_frame.pack(fill="both", expand=True)
 
-        lbl_orig = tk.Label(preview_frame, bg="#000000")
-        lbl_orig.pack(side="left", fill="both", expand=True, padx=2)
-        lbl_conv = tk.Label(preview_frame, bg="#000000")
-        lbl_conv.pack(side="right", fill="both", expand=True, padx=2)
+        # Las imágenes no deben determinar el tamaño de su propia vista previa.
+        # Cada mitad conserva su espacio aunque cambie la resolución del resultado.
+        preview_frame.grid_columnconfigure((0, 1), weight=1, uniform="preview")
+        preview_frame.grid_rowconfigure(0, weight=1)
+        viewports = []
+        for column in (0, 1):
+            viewport = tk.Frame(preview_frame, bg="#000000", width=1, height=1)
+            viewport.grid(row=0, column=column, sticky="nsew", padx=2)
+            viewport.grid_propagate(False)
+            viewports.append(viewport)
+        lbl_orig = tk.Label(viewports[0], bg="#000000", borderwidth=0)
+        lbl_orig.place(relx=.5, rely=.5, anchor="center")
+        lbl_conv = tk.Label(viewports[1], bg="#000000", borderwidth=0)
+        lbl_conv.place(relx=.5, rely=.5, anchor="center")
 
         info_lbl = tk.Label(right, text="", bg="#1a1a2e", fg="#888899",
-                            font=("Segoe UI", 7))
-        info_lbl.pack(pady=2)
+                            font=("Segoe UI", 7), width=1, height=1)
+        info_lbl.pack(fill="x", pady=2)
 
         self._conv_refresh_id = None
         self._conv_quality_id = None
 
-        def refresh(fast=True):
-            # Cancelar renders pendientes
+        def cancel_pending():
             for attr in ('_conv_refresh_id', '_conv_quality_id'):
                 rid = getattr(self, attr, None)
                 if rid:
                     try: win.after_cancel(rid)
-                    except: pass
+                    except tk.TclError: pass
                 setattr(self, attr, None)
+
+        def refresh(fast=True):
+            cancel_pending()
+            if not win.winfo_exists(): return
+
+            def render(fast, timer_attr):
+                setattr(self, timer_attr, None)
+                if not win.winfo_exists(): return
+                try: _render_preview(fast=fast)
+                except Exception as e: info_lbl.config(text=f"Error: {e}")
 
             # Render rápido inmediato (baja res, umbral simple)
             if fast:
-                def do_fast():
-                    if not win.winfo_exists(): return
-                    try: _render_preview(fast=True)
-                    except Exception as e: info_lbl.config(text=f"Error: {e}")
-                self._conv_refresh_id = win.after(30, do_fast)
+                self._conv_refresh_id = win.after(30, lambda: render(True, '_conv_refresh_id'))
                 # Full quality 400ms después de que el usuario suelte
-                def do_full():
-                    if not win.winfo_exists(): return
-                    try: _render_preview(fast=False)
-                    except Exception as e: info_lbl.config(text=f"Error: {e}")
-                self._conv_quality_id = win.after(420, do_full)
+                self._conv_quality_id = win.after(420, lambda: render(False, '_conv_quality_id'))
             else:
-                def do_full():
-                    if not win.winfo_exists(): return
-                    try: _render_preview(fast=False)
-                    except Exception as e: info_lbl.config(text=f"Error: {e}")
-                self._conv_refresh_id = win.after(30, do_full)
+                self._conv_refresh_id = win.after(30, lambda: render(False, '_conv_refresh_id'))
 
         def _render_preview(fast=False):
             from PIL import Image as PILImg, ImageEnhance, ImageOps
             import numpy as np
 
-            PW = max(1, (right.winfo_width() // 2) - 10) or 300
-            PH = max(1, right.winfo_height() - 60) or 300
+            PW = max(1, min(viewport.winfo_width() for viewport in viewports) - 4)
+            PH = max(1, preview_frame.winfo_height() - 4)
 
             # Imagen original (rotada si procede)
             img = self.overlay_image.copy()
@@ -2227,10 +2234,23 @@ class GerberEditor(tk.Tk):
                             a[ny,nx] += err * wt / div
             return out
 
-        # Conectar resize a refresh
-        win.bind("<Configure>", lambda e: refresh(fast=True))
-        # Render inicial
-        win.after(100, lambda: refresh(fast=False))
+        # Configure en un Toplevel también recibe los cambios de sus hijos.
+        # Escuchar solo el área de preview evita que dibujar dispare otro render.
+        preview_size = None
+        def preview_resized(event):
+            nonlocal preview_size
+            size = (event.width, event.height)
+            if event.widget is preview_frame and size != preview_size:
+                preview_size = size
+                refresh(fast=True)
+
+        def editor_destroyed(event):
+            if event.widget is win:
+                cancel_pending()
+
+        preview_frame.bind("<Configure>", preview_resized)
+        win.bind("<Destroy>", editor_destroyed, add="+")
+        refresh(fast=False)
 
     def export_gerber(self):
         if not self.gerber_layers:
