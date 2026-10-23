@@ -3,6 +3,8 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+import json
+import zipfile
 import tkinter as tk
 import unittest
 from unittest.mock import patch
@@ -389,6 +391,103 @@ class OriginalWorkflowTests(unittest.TestCase):
                 self.assertIn('M02*', content)
                 self.assertNotIn('M48', content)
                 self.assertIn('%ADD', content)
+
+    def test_export_checkboxes_contrast_toggle_and_reopened_preferences(self):
+        items = self.app._build_export_items()
+        items[0]['has_logo'] = True
+        self.app.logo_targets = [{'tag': items[0]['tag'], 'def_mode': 'under', 'def_clearance': .55}]
+        def inspect_dialog(dialog, first):
+            checks = [w for w in self.walk(dialog) if isinstance(w, tk.Checkbutton)]
+            self.assertEqual(len(checks), 2)
+            if first:
+                rgb_fg = checks[0].winfo_rgb(checks[0].cget('fg'))
+                rgb_bg = checks[0].winfo_rgb(checks[0].cget('selectcolor'))
+                self.assertGreater(sum(abs(a-b) for a,b in zip(rgb_fg, rgb_bg)), 60_000)
+                for expected in (0, 1):
+                    checks[0].invoke()
+                    self.app.update_idletasks()
+                    self.assertEqual(self.app.getvar(checks[0].cget('variable')), expected)
+                checks[1].invoke()
+                radio = next(w for w in self.walk(dialog) if isinstance(w, tk.Radiobutton)
+                             and w.cget('value') == 'clearance')
+                radio.invoke()
+                entry = next(w for w in self.walk(dialog) if isinstance(w, tk.Entry))
+                entry.delete(0, 'end'); entry.insert(0, '0,37')
+            else:
+                self.assertEqual(self.app.getvar(checks[0].cget('variable')), 1)
+                self.assertEqual(self.app.getvar(checks[1].cget('variable')), 0)
+                radio = next(w for w in self.walk(dialog) if isinstance(w, tk.Radiobutton))
+                self.assertEqual(self.app.getvar(radio.cget('variable')), 'clearance')
+            next(w for w in self.walk(dialog) if isinstance(w, tk.Button)
+                 and w.cget('text') == 'Exportar seleccionadas').invoke()
+        for first in (True, False):
+            with patch.object(self.app, 'wait_window', side_effect=lambda dialog: inspect_dialog(dialog, first)):
+                choices = self.app._choose_export_dialog(items)
+            self.assertEqual(len(choices), 1)
+            self.assertEqual(choices[0]['mode'], 'clearance')
+            self.assertEqual(choices[0]['clearance'], .37)
+
+    def test_export_zip_all_recipes_keep_drills_and_untouched_source_files(self):
+        from test_fabrication_export import create_source
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            self.import_logo(folder)
+            originals = {Path(e['name']).name: ''.join(e['layer'].raw_lines).encode()
+                         for e in self.app.gerber_layers}
+            originals.update({'test.drl': DRILLS.encode(),
+                              'parametros/nc_param.txt': b'INTEGER-PLACES 5\nDECIMAL-PLACES 5\n',
+                              'COPPER_BOTTOM.art': BOARD.encode()})
+            self.app.fabrication_source = create_source(folder, originals)
+            source_before = self.app.fabrication_source.read_bytes()
+            item = self.app._build_export_items()[1]
+            for mode in ('base', 'merge', 'under', 'clearance', 'logo_windows', 'new'):
+                with self.subTest(mode=mode), \
+                     patch.object(self.app, '_choose_export_dialog', return_value=[{'item': item, 'mode': mode, 'clearance': .2}]), \
+                     patch('gerber_silkscreen_editor.filedialog.askdirectory') as ask, \
+                     patch('gerber_silkscreen_editor.messagebox.showinfo'), \
+                     patch('gerber_silkscreen_editor.messagebox.showerror') as error:
+                    output = self.app.export_gerber()
+                    self.assertFalse(error.called, error.call_args)
+                    self.assertTrue(output.exists())
+                    ask.assert_not_called()
+                    with zipfile.ZipFile(output) as archive:
+                        self.assertEqual(archive.read('test.drl'), originals['test.drl'])
+                        self.assertEqual(archive.read('outline.gko'), originals['outline.gko'])
+                        self.assertEqual(archive.read('COPPER_BOTTOM.art'), originals['COPPER_BOTTOM.art'])
+                        if mode == 'base': self.assertEqual(archive.read('silk.gto'), originals['silk.gto'])
+                        else: self.assertNotEqual(archive.read('silk.gto'), originals['silk.gto'])
+                        self.assertIn(b'M02*', archive.read('silk.gto'))
+                        self.assertEqual(json.loads(archive.read('manifest.json'))['changes'][0]['mode'], mode)
+                    refs, errors = load_references([output])
+                    self.assertFalse(errors, errors)
+                    self.assertEqual(len([r for r in refs if r.coord_format]), 1)
+                    self.assertEqual(self.app.fabrication_source.read_bytes(), source_before)
+            self.assertEqual(len(list(folder.glob('*_edit_v*.zip'))), 6)
+
+    def test_export_loose_layers_includes_drills_and_cancel_creates_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            self.import_logo(folder)
+            target = folder/'export'
+            item = self.app._build_export_items()[1]
+            with patch.object(self.app, '_choose_export_dialog', return_value=None), \
+                 patch('gerber_silkscreen_editor.filedialog.askdirectory') as ask:
+                self.assertIsNone(self.app.export_gerber())
+                ask.assert_not_called()
+                self.assertFalse(target.exists())
+            with patch.object(self.app, '_choose_export_dialog', return_value=[{'item': item, 'mode': 'merge'}]), \
+                 patch('gerber_silkscreen_editor.filedialog.askdirectory', return_value=str(target)), \
+                 patch('gerber_silkscreen_editor.messagebox.showinfo'), \
+                 patch('gerber_silkscreen_editor.messagebox.showerror') as error:
+                output = self.app.export_gerber()
+                self.assertFalse(error.called, error.call_args)
+                self.assertTrue(output.exists())
+            refs, errors = load_references([output])
+            self.assertFalse(errors, errors)
+            self.assertEqual(len(refs), 3)
+            drills = next(r for r in refs if r.coord_format)
+            self.assertEqual(drills.coord_format, (5, 5))
+            self.assertEqual(len(drills.layer.drawables), 2)
 
 
 if __name__ == '__main__':
