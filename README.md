@@ -1,39 +1,42 @@
 # Sputtering Design Tools
 
-Herramientas de diseño para proyectos de Sputtering Audio Visual, inicialmente centradas en Eurorack y abiertas a otros formatos y usos en el futuro.
+Herramientas de diseño de Sputtering Audio Visual, centradas inicialmente en PCB y Eurorack y abiertas a otros formatos en el futuro.
 
 ## Estado actual
 
-La primera versión incorpora el editor Gerber existente, sin modificar su código. Permite cargar capas Gerber, importar imágenes, posicionarlas y generar capas o combinarlas con archivos existentes. Aunque el script conserva su nombre histórico `gerber_silkscreen_editor.py`, el alcance del repositorio no está limitado a la serigrafía.
+Versión comprobada en uso el **23 de octubre de 2026**. El desarrollo queda cerrado por ahora y se retomará cuando aparezca un fallo concreto. Pasan **48 pruebas locales**. El cierre, sus comprobaciones y el procedimiento para retomar un fallo están en [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md).
 
-Esta incorporación establece el punto de partida del control de versiones. Todavía no se dispone de planos para validar el funcionamiento real; las correcciones e interfaz se abordarán en cambios posteriores.
+La pantalla principal conserva el editor Gerber y su flujo de serigrafía: capas, imágenes PNG/JPG/SVG, conversión, posición/escala/giro, alineación, recetas y selección de destinos. Los drills Excellon se muestran como referencia. Blanco representa tinta sobre PCB negra y la conversión aplicada se comparte entre la vista y la exportación.
 
-## Ejecución del editor actual
+La imagen se recorta automáticamente al contorno de la PCB **tal como esté colocada a mano**, sin centrarla ni cambiar su tamaño al exportar. La exportación genera un paquete completo y un ZIP numerado, conserva los archivos no editados y comprueba su integridad.
 
-Requiere Python con Tkinter, Pillow y NumPy:
+El frontal Eurorack 3U es una ventana adicional de la misma aplicación: ancho en HP, PCB a escala real, agujeros, textos, proyectos portátiles y SVG 1:1.
+
+Guía de uso, recorte, conversión y exportación: [FRONTAL_3U.md](FRONTAL_3U.md).
+
+## Ejecución
+
+Requiere Python con Tkinter, Pillow y NumPy. Desde la carpeta del repositorio:
 
 ```powershell
 python -m pip install Pillow numpy
-python gerber_silkscreen_editor.py
+python sputtering_design_tools.py
 ```
 
-La vía vectorial SVG utiliza además `svgpathtools`. La previsualización SVG intenta utilizar Inkscape, instalado y accesible en PATH:
+En Windows, `Sputtering Design Tools.pyw` abre el editor sin consola. El script histórico `gerber_silkscreen_editor.py` abre la misma interfaz. `python sputtering_design_tools.py --panel` abre directamente el frontal.
+
+La conversión vectorial SVG utiliza `svgpathtools`; su previsualización intenta utilizar Inkscape disponible en PATH. Las dependencias aún no están fijadas ni se ha certificado una instalación limpia.
+
+## Comprobaciones
 
 ```powershell
-python -m pip install svgpathtools
+python -m unittest discover -s tests -v
 ```
 
-Las dependencias aún no tienen versiones fijadas. El soporte SVG y la correspondencia entre vista previa y exportación necesitan revisión. Conservar los Gerber originales y exportar a una carpeta distinta.
+Las pruebas de ventana requieren Tkinter funcional. La comprobación independiente del recorte real utilizó Gerbonara, que no es una dependencia de la aplicación. Los diseños y archivos de fabricación reales se conservan fuera de este repositorio; la validación del editor no sustituye el DRC del diseño.
 
-## Evolución prevista
+## Historial y alcance futuro
 
-- Edición y composición de capas Gerber, más allá de silkscreen.
-- Creación de paneles ciegos (blank panels) para Eurorack.
-- Preparación de artworks y gráficos para paneles y placas.
-- Ampliación a otros formatos y proyectos de diseño.
+[BASELINE.md](BASELINE.md) identifica mediante SHA-256 el script original incorporado el 22 de octubre. Las correcciones posteriores se conservan en Git; no se utiliza ese hash para identificar la versión actual.
 
-Estos puntos describen la dirección del proyecto; no son funciones implementadas en esta versión. El siguiente trabajo se detalla en [ROADMAP.md](ROADMAP.md).
-
-## Referencia inicial
-
-El script se conserva exactamente como se recibió. Su origen y SHA-256 están registrados en [BASELINE.md](BASELINE.md). Git sustituye a las copias numeradas para seguir su evolución.
+[ROADMAP.md](ROADMAP.md) recoge posibilidades futuras como blank panels, artworks y otros formatos. Quedan como referencia, sin iniciar trabajo adicional durante este cierre.
