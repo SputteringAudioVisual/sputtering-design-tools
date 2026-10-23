@@ -24,7 +24,7 @@ La rueda hace zoom, el botón derecho desplaza la vista y el panel lateral tiene
 
 El SVG es un plano vectorial para continuar el diseño: los círculos representan cortes/agujeros, no taladros Excellon. Los textos permanecen editables y dependen de la fuente Arial/sans-serif; antes de fabricar, conviértelos a trazados en tu editor vectorial y comprueba medidas y encaje mecánico. La aplicación no comprueba distancias de tuercas, cuerpos de potenciómetros, componentes ni profundidad detrás del panel. Avisa de agujeros que se solapan o salen del borde; el aviso de posición del texto corresponde a su centro, no a toda su extensión tipográfica.
 
-La referencia admite Gerber absoluto con supresión de ceros iniciales, aperturas C/R/O, líneas, arcos multicuadrante aproximados y regiones simples. Se rechazan expresamente macros, ciertas transformaciones, regiones de varios contornos y formatos de coordenadas no soportados. No se exportan los Gerber cargados desde este espacio de trabajo. La revisión visual de polaridades complejas y la validación con la PCB real siguen pendientes.
+La referencia admite Gerber absoluto con supresión de ceros iniciales, aperturas C/R/O, líneas, arcos multicuadrante aproximados y regiones simples. Se admiten las declaraciones de transformación identidad de Allegro; se rechazan macros, transformaciones no soportadas, regiones de varios contornos y otros formatos de coordenadas. No se exportan los Gerber cargados desde este espacio de trabajo. Se ha comprobado la carga del contorno y serigrafía superior reales de la PCB de distorsión (128,5 × 110 mm); siguen pendientes la revisión visual de polaridades complejas y la validación del encaje mecánico.
 
 ### Comprobaciones
 
@@ -36,7 +36,7 @@ Las pruebas verifican unidades y aperturas, trazos modales, límites físicos, c
 
 ## Versión inicial
 
-Incorporada el 22 de octubre de 2026 como copia exacta del script existente. El hash de `BASELINE.md` identifica esa primera versión. El 23 de octubre se añadió el espacio de frontales y se corrigieron delimitadores, selección G54, operaciones modales y conversión de aperturas del lector para poder cargar las referencias a escala real. No se ha validado todavía con el Gerber de la distorsión del usuario.
+Incorporada el 22 de octubre de 2026 como copia exacta del script existente. El hash de `BASELINE.md` identifica esa primera versión. El 23 de octubre se añadió el espacio de frontales y se corrigieron delimitadores, selección G54, operaciones modales y conversión de aperturas del lector para poder cargar las referencias a escala real. La primera carga de la distorsión verifica dimensiones y geometría reconocida; no equivale a validar el panel para fabricación.
 
 Origen y verificación: [BASELINE.md](BASELINE.md).
 La revisión inicial del editor se conserva en el repositorio local de trabajo.
