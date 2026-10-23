@@ -2,7 +2,19 @@
 
 Herramientas de diseño para Eurorack. Incluye el editor Gerber original y un espacio de trabajo para crear frontales 3U sobre una PCB de referencia.
 
+## Pantalla principal: la serigrafía original
+
+El inicio vuelve a ser **Gerber Silkscreen Editor**, con su barra, colores y controles originales. Siguen en su sitio Añadir capa, Importar Imagen, Editor de conversión, alineación, transformaciones, selección de capas del logo, Exportar Gerber y Generar capa nueva.
+
+- **PCB y referencias → Añadir PCB + drills** añade archivos Gerber/Excellon o un ZIP. Los drills se dibujan en naranja, con círculo y centro, sobre las mismas coordenadas de la PCB. Son referencias: no se añaden a la lista de destinos de exportación Gerber.
+- **Frontal Eurorack 3U…** abre una ventana adicional con las capas cargadas, incluidos los drills. Al abrirla o cerrarla, el logo, la conversión y la posición de la serigrafía principal se conservan.
+- El formato drill se toma de la cabecera o de `nc_param.txt`, detectado en la misma carpeta/ZIP. Si no está definido se pide un formato explícito, en lugar de adivinar una escala.
+
+`python sputtering_design_tools.py --panel` queda disponible para abrir solo el frontal de forma explícita. El lanzador normal, el acceso `.pyw` y el script Gerber histórico abren la interfaz de serigrafía.
+
 ## Frontal Eurorack 3U
+
+Primero abre la interfaz de serigrafía y pulsa el menú **Frontal Eurorack 3U…**. Los siguientes controles pertenecen a esa ventana adicional.
 
 Ejecuta `sputtering_design_tools.py` o abre `Sputtering Design Tools.pyw` con doble clic en Windows. Para abrir una demostración sintética:
 
