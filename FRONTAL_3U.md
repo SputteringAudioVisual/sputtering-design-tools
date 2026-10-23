@@ -12,6 +12,14 @@ El inicio vuelve a ser **Gerber Silkscreen Editor**, con su barra, colores y con
 
 `python sputtering_design_tools.py --panel` queda disponible para abrir solo el frontal de forma explícita. El lanzador normal, el acceso `.pyw` y el script Gerber histórico abren la interfaz de serigrafía.
 
+## Tinta blanca sobre PCB negra
+
+En el editor de conversión y en la imagen de la vista general, **blanco representa tinta**. El negro de la previsualización representa placa sin tinta; el azul del marco solo indica la selección. La vista general conserva los colores de las demás capas como referencias.
+
+Las opciones **Claros → tinta blanca (foto positiva)** y **Oscuros → tinta blanca (foto negativa)** eligen qué zonas de la imagen se imprimen. Se conserva la opción que estuviera aplicada. El botón **Aplicar a PCB y exportación** transfiere algoritmo, umbral, contraste, selección de zonas y tamaño de píxel a la imagen general y al Gerber. El pie del editor indica si quedan ajustes sin aplicar.
+
+Las vistas comparten preparación y máscara con el conversor Gerber. La original queda fija para comparar. Las previsualizaciones se limitan a 600 píxeles en el lado mayor; el Gerber utiliza la resolución física indicada. El ojo de exportación añade la receta de mezcla/ventanas sobre la capa base y muestra la serigrafía en blanco sobre negro; el cobre mantiene su propia paleta.
+
 ## Exportar la PCB con sus modificaciones
 
 **Exportar Gerber** mantiene el diálogo de capas y recetas. Las casillas tienen una marca de alto contraste y la selección, modo y holgura se conservan al volver a abrir el diálogo durante la sesión. Las capas sin marcar conservan su contenido original en el paquete.
