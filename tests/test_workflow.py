@@ -142,6 +142,33 @@ class OriginalWorkflowTests(unittest.TestCase):
         self.app._redraw()
         self.assertFalse(self.app.canvas.find_withtag('drill_reference'))
 
+    def test_empty_silkscreen_is_an_export_target_without_changing_view(self):
+        content = 'G04 Empty bottom silk*\n%FSLAX36Y36*%\n%MOMM*%\nM02*\n'
+        ref = Reference('v003/SILK_BOTTOM.art', content)
+        self.assertIsNone(ref.layer.bounds)
+        bounds = self.app._get_all_bounds()
+        self.app.add_references([ref])
+        self.app.update_idletasks()
+        self.app._redraw()
+        self.assertEqual(self.app._get_all_bounds(), bounds)
+        self.assertEqual(len(self.app._build_export_items()), 3)
+        with tempfile.TemporaryDirectory() as folder:
+            self.import_logo(folder)
+            layer = self.app.gerber_layers[-1]['layer']
+            commands = self.app._build_logo_cmds(ImageToGerber(layer), 128)
+            target = Path(folder)/'bottom.art'
+            layer.export_with_overlay(commands, target)
+            loaded = GerberLayer().load(target)
+            self.assertTrue(loaded.drawables)
+            self.assertIn('M02*', target.read_text())
+        restored = PanelDocument.from_dict(PanelDocument(layers=[Reference('outline.gko', BOARD), ref]).to_dict())
+        self.assertEqual(restored.layers[1].content, content)
+        self.assertEqual(restored.reference_bounds(), PanelDocument(layers=[Reference('outline.gko', BOARD)]).reference_bounds())
+        with self.assertRaises(ValueError):
+            Reference('broken.art', content.replace('M02*', 'G99X100Y100*\nM02*'))
+        with self.assertRaises(ValueError):
+            Reference('incomplete.art', content.replace('M02*', ''))
+
     def pump_events(self, seconds):
         until = time.monotonic() + seconds
         while time.monotonic() < until:
