@@ -74,12 +74,31 @@ class Reference:
             (r'%\s*FS[LT]I', 'coordenadas incrementales'),
             (r'%\s*FST', 'supresión de ceros finales'),
             (r'(?:^|[\s*])G74\*', 'arcos de cuadrante único'),
-            (r'%\s*(?:LM|LR|LS|MI|SF|OF|AS)', 'transformaciones Gerber de imagen/apertura'),
             (r'(?:^|[\s*])G91\*', 'coordenadas incrementales'),
         ]
         for pattern, label in unsupported:
             if re.search(pattern, self.content):
                 raise ValueError(f"{self.name}: todavía no se admite {label} en la referencia.")
+        # Allegro groups identity transforms in one %...% block. Check every
+        # command, not only the first command after the opening percent sign.
+        for command in re.split(r'[%*]', self.content):
+            command = command.strip()
+            if command.startswith(('OF', 'MI', 'SF')):
+                match = re.fullmatch(r'(OF|MI|SF)A([+-]?[\d.]+)B([+-]?[\d.]+)', command)
+                identity = 1 if command.startswith('SF') else 0
+                if not match or any(number(match.group(i)) != identity for i in (2, 3)):
+                    raise ValueError(f'{self.name}: transformación no admitida: {command}.')
+            elif command.startswith(('IR', 'LR', 'LS')):
+                identity = 1 if command.startswith('LS') else 0
+                try:
+                    valid = number(command[2:]) == identity
+                except ValueError:
+                    valid = False
+                if not valid:
+                    raise ValueError(f'{self.name}: transformación no admitida: {command}.')
+            elif command.startswith(('LM', 'AS', 'IP')):
+                if command not in {'LMN', 'ASAXBY', 'IPPOS'}:
+                    raise ValueError(f'{self.name}: transformación no admitida: {command}.')
         for shape in re.findall(r'%\s*ADD\d+([A-Za-z_][\w]*)', self.content):
             if shape not in {'C', 'R', 'O'}:
                 raise ValueError(f"{self.name}: apertura {shape} todavía no admitida.")
