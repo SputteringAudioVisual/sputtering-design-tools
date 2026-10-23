@@ -109,6 +109,7 @@ class FabricationExport:
 
     def finish(self, changes, settings, drill_formats=None):
         prefix = re.sub(r'[^\w.-]+', '_', self.source_zip.stem if self.source_zip else 'gerbers')
+        prefix = re.sub(r'(?:_edit_v\d+)+$', '', prefix)
         source_hash = hashlib.sha256(self.source_zip.read_bytes()).hexdigest() if self.source_zip else None
         self._preserve_metadata('manifest.json')
         self._preserve_metadata('LEEME_FABRICACION.txt')
