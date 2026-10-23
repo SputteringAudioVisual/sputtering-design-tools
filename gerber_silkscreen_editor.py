@@ -55,6 +55,9 @@ class GerberLayer:
     def _parse(self):
         """Parseo básico: extrae formato, unidades y primitivas de dibujo."""
         self.drawables = []
+        self.used_apertures = set()
+        self.unit = "MM"
+        last_op = 2
         coords = []
         current_x, current_y = 0.0, 0.0
         current_aperture = 10
@@ -73,7 +76,7 @@ class GerberLayer:
         header_done = False
 
         for raw in tokens:
-            cmd = raw.strip().lstrip('%')
+            cmd = raw.replace('%', '').strip()
 
             # Formato de coordenadas
             m = re.match(r'FSLA?X(\d)(\d)Y(\d)(\d)', cmd)
@@ -97,14 +100,17 @@ class GerberLayer:
                 shape = m.group(2)
                 sizes = [float(s) for s in m.group(3).split('X') if s]
                 sx = sizes[0] if sizes else 0.1
-                sy = sizes[1] if len(sizes) > 1 else sx
+                sy = sizes[1] if len(sizes) > 1 and shape != 'C' else sx
+                if self.unit == "IN":
+                    sx *= 25.4
+                    sy *= 25.4
                 apertures[code] = (shape, sx, sy)
                 self.used_apertures.add(code)
                 continue
 
             # Selección de apertura
-            m = re.match(r'D(\d+)$', cmd)
-            if m:
+            m = re.fullmatch(r'(?:G54)?D(\d+)', cmd)
+            if m and int(m.group(1)) >= 10:
                 current_aperture = int(m.group(1))
                 continue
 
@@ -141,13 +147,14 @@ class GerberLayer:
                 arc_mode = 3
 
             # Movimiento / flash / draw (acepta prefijo G01/G02/G03)
-            m = re.match(r'(?:G0[0123])?(X([+-]?\d+))?(Y([+-]?\d+))?(I([+-]?\d+))?(J([+-]?\d+))?D0?([123])', cmd)
-            if m:
+            m = re.fullmatch(r'(?:G0[0123])?(X([+-]?\d+))?(Y([+-]?\d+))?(I([+-]?\d+))?(J([+-]?\d+))?(?:D0?([123]))?', cmd)
+            if m and any(m.group(n) is not None for n in (2, 4, 6, 8, 9)):
                 raw_x = m.group(2)
                 raw_y = m.group(4)
                 raw_i = m.group(6)
                 raw_j = m.group(8)
-                op = int(m.group(9))
+                op = int(m.group(9)) if m.group(9) else last_op
+                last_op = op
 
                 prev_x, prev_y = current_x, current_y
                 if raw_x is not None:
@@ -424,8 +431,8 @@ def _apply_bayer(arr, n):
     def _bm(n):
         if n == 1: return np.array([[0]])
         m = _bm(n//2)
-        return np.bmat([[4*m, 4*m+2], [4*m+3, 4*m+1]]).A / (n*n)
-    bm = _bm(n) * 255; h, w = arr.shape
+        return np.block([[4*m, 4*m+2], [4*m+3, 4*m+1]])
+    bm = (_bm(n) + .5) * (255 / (n*n)); h, w = arr.shape
     tiled = np.tile(bm, (h//n+1, w//n+1))[:h, :w]
     return arr < tiled
 
@@ -447,6 +454,56 @@ def _apply_error_diffusion(arr, thresh, method):
                 ny,nx = y+dy, x+dx
                 if 0<=ny<h and 0<=nx<w: a[ny,nx] += err * wt / div
     return out
+
+
+def _raster_ink_mask(arr, algo, threshold):
+    """Máscara común para preview y Gerber: True siempre significa tinta."""
+    import numpy as np
+    arr = np.asarray(arr, dtype=np.float32)
+    if algo == 'floyd':
+        return _apply_floyd(arr, threshold)
+    if algo == 'atkinson':
+        return _apply_atkinson(arr, threshold)
+    if algo == 'bayer4':
+        return _apply_bayer(arr, 4)
+    if algo == 'bayer8':
+        return _apply_bayer(arr, 8)
+    if algo in ('stucki', 'jarvis'):
+        return _apply_error_diffusion(arr, threshold, algo)
+    return arr < threshold
+
+
+def _prepare_logo_image(image, width_mm, height_mm, angle, contrast, invert):
+    """Misma rotación, contraste y elección de zonas en todas las vistas/Gerber."""
+    from PIL import ImageEnhance, ImageOps
+    background = (0, 0, 0) if invert else (255, 255, 255)
+    if image.mode in {'RGBA', 'LA'} or 'transparency' in image.info:
+        original = Image.alpha_composite(Image.new('RGBA', image.size, background+(255,)),
+                                         image.convert('RGBA')).convert('RGB')
+    else:
+        original = image.convert('RGB')
+    if angle % 360:
+        original = original.rotate(-angle, expand=True, resample=Image.BICUBIC, fillcolor=background)
+        radians = math.radians(angle)
+        c, s = abs(math.cos(radians)), abs(math.sin(radians))
+        width_mm, height_mm = width_mm*c+height_mm*s, width_mm*s+height_mm*c
+    gray = original.convert('L')
+    if contrast != 1.0:
+        gray = ImageEnhance.Contrast(gray).enhance(contrast)
+    if invert:
+        gray = ImageOps.invert(gray)
+    return original, gray, width_mm, height_mm
+
+
+def _image_ink_mask(gray, width_mm, height_mm, pixel_mm, algorithm, threshold, limit=None):
+    import numpy as np
+    cols = max(1, int(round(width_mm/pixel_mm)))
+    rows = max(1, int(round(height_mm/pixel_mm)))
+    if limit and max(cols, rows) > limit:
+        factor = limit/max(cols, rows)
+        cols, rows = max(1, int(cols*factor)), max(1, int(rows*factor))
+    small = gray.resize((cols, rows), Image.LANCZOS)
+    return _raster_ink_mask(np.array(small, dtype=np.float32), algorithm, threshold)
 
 
 class ImageToGerber:
@@ -484,27 +541,9 @@ class ImageToGerber:
 
         # Resolución de dithering (puede ser más gruesa para efecto de trama visible)
         px_mm = max(dot_mm, dither_px_mm) if dither_px_mm else dot_mm
-        dith_cols = max(1, int(round(width_mm / px_mm)))
-        dith_rows = max(1, int(round(height_mm / px_mm)))
-
-        # 1) Dithering a la resolución del píxel visual
-        resized_dith = gray.resize((dith_cols, dith_rows), Image.LANCZOS)
-        arr = np.array(resized_dith, dtype=np.float32)
-
-        if dither_algo == 'floyd':
-            dark_dith = _apply_floyd(arr, threshold)
-        elif dither_algo == 'atkinson':
-            dark_dith = _apply_atkinson(arr, threshold)
-        elif dither_algo == 'bayer4':
-            dark_dith = _apply_bayer(arr, 4)
-        elif dither_algo == 'bayer8':
-            dark_dith = _apply_bayer(arr, 8)
-        elif dither_algo == 'stucki':
-            dark_dith = _apply_error_diffusion(arr, threshold, 'stucki')
-        elif dither_algo == 'jarvis':
-            dark_dith = _apply_error_diffusion(arr, threshold, 'jarvis')
-        else:
-            dark_dith = arr < threshold
+        # 1) La misma máscara que las vistas previas, a resolución de fabricación.
+        dark_dith = _image_ink_mask(gray, width_mm, height_mm, px_mm, dither_algo, threshold)
+        dith_rows, dith_cols = dark_dith.shape
 
         # 2) Escalar la máscara binaria a resolución de exportación (NEAREST = bloques)
         if dith_cols != exp_cols or dith_rows != exp_rows:
@@ -1411,6 +1450,8 @@ class GerberEditor(tk.Tk):
 
     def _draw_layer_entry(self, entry, fast=False):
         layer = entry["layer"]
+        if not layer.drawables:
+            return
         color = entry["color"]
         dim = self._dim_color(color)        # tono apagado para el plano de masa
         scale = self._get_mm_scale()
@@ -1463,40 +1504,40 @@ class GerberEditor(tk.Tk):
                     self.canvas.create_oval(xc-sx, yc-sy, xc+sx, yc+sy,
                                             fill=color, outline="")
 
-    def _make_overlay_image(self, disp_w: int, disp_h: int, thresh: int, angle: float):
-        """
-        Genera la imagen RGBA del overlay al TAMAÑO EXACTO de display (disp_w x disp_h),
-        para que coincida pixel a pixel con el marco. El procesado numpy se hace a
-        resolución reducida (rápido) y luego se escala al tamaño real.
-        """
+    def _logo_raster(self, thresh=None, *, algorithm=None, contrast=None, invert=None,
+                     pixel_mm=None, angle=None, limit=600):
         import numpy as np
+        try: dot = max(.15, float(self.entry_dot.get()))
+        except ValueError: dot = .15
+        thresh = self.overlay_threshold.get() if thresh is None else thresh
+        algorithm = getattr(self, '_conv_algo', 'threshold') if algorithm is None else algorithm
+        contrast = getattr(self, '_conv_contrast', 1.0) if contrast is None else contrast
+        invert = getattr(self, '_conv_invert', False) if invert is None else invert
+        pixel_mm = max(dot, getattr(self, '_conv_pxsize', dot) if pixel_mm is None else pixel_mm)
+        angle = self.overlay_angle_deg if angle is None else angle
+        key = (id(self.overlay_image), self.overlay_w_mm, self.overlay_h_mm, angle,
+               thresh, algorithm, contrast, invert, pixel_mm, limit)
+        cache = getattr(self, '_logo_raster_cache', {})
+        if key not in cache:
+            original, gray, width, height = _prepare_logo_image(
+                self.overlay_image, self.overlay_w_mm, self.overlay_h_mm, angle, contrast, invert)
+            ink = _image_ink_mask(gray, width, height, pixel_mm, algorithm, thresh, limit)
+            mask = Image.fromarray(ink.astype(np.uint8)*255)
+            if len(cache) >= 4: cache.pop(next(iter(cache)))
+            cache[key] = {'original': original, 'mask': mask, 'width_mm': width,
+                          'height_mm': height, 'pixel_mm': pixel_mm}
+            self._logo_raster_cache = cache
+        return cache[key]
 
-        disp_w = max(4, int(disp_w))
-        disp_h = max(4, int(disp_h))
-
-        # Resolución de procesado: capada para que numpy sea rápido
-        PROC_CAP = 600
-        pw = max(4, min(disp_w, PROC_CAP))
-        ph = max(4, min(disp_h, PROC_CAP))
-
-        src = self.overlay_image.convert("L")
-        small = src.resize((pw, ph), Image.BILINEAR)
-        arr = np.array(small, dtype=np.uint8)
-        mask = arr < thresh
-
-        rgba_arr = np.zeros((ph, pw, 4), dtype=np.uint8)
-        rgba_arr[mask] = [0, 170, 255, 210]
-        rgba = Image.fromarray(rgba_arr, "RGBA")
-
-        # Escalar al tamaño de display real → coincide exactamente con el marco
-        if (pw, ph) != (disp_w, disp_h):
-            rgba = rgba.resize((disp_w, disp_h), Image.NEAREST)
-
-        # Rotar al final
-        if angle % 360 != 0:
-            rgba = rgba.rotate(-angle, expand=True, resample=Image.NEAREST)
-
-        return rgba
+    def _make_overlay_image(self, disp_w: int, disp_h: int, thresh: int, angle: float):
+        import numpy as np
+        raster = self._logo_raster(thresh, angle=angle)
+        width = max(4, round(disp_w*raster['width_mm']/self.overlay_w_mm))
+        height = max(4, round(disp_h*raster['height_mm']/self.overlay_h_mm))
+        mask = raster['mask'].resize((width, height), Image.NEAREST)
+        rgba = np.zeros((height, width, 4), dtype=np.uint8)
+        rgba[np.array(mask)>0] = [255, 255, 255, 255]
+        return Image.fromarray(rgba, 'RGBA')
 
     def _draw_overlay(self):
         if not self.overlay_image:
@@ -1514,7 +1555,10 @@ class GerberEditor(tk.Tk):
         disp_w = min(disp_w, MAX_DISP)
         disp_h = min(disp_h, MAX_DISP)
 
-        cache_key = (thresh, round(angle, 1), disp_w, disp_h)
+        cache_key = (id(self.overlay_image), thresh, angle, disp_w, disp_h,
+                     self.overlay_w_mm, self.overlay_h_mm, self.entry_dot.get(),
+                     getattr(self, '_conv_algo', 'threshold'), getattr(self, '_conv_contrast', 1.0),
+                     getattr(self, '_conv_invert', False), getattr(self, '_conv_pxsize', None))
         if cache_key != self._overlay_cache_key:
             rgba = self._make_overlay_image(disp_w, disp_h, thresh, angle)
             self._overlay_tk_cache = ImageTk.PhotoImage(rgba)
@@ -1862,7 +1906,7 @@ class GerberEditor(tk.Tk):
         """Bounding box union de todas las capas visibles."""
         xs, ys = [], []
         for entry in self.gerber_layers:
-            if entry["var_visible"].get():
+            if entry["var_visible"].get() and entry["layer"].drawables:
                 b = entry["layer"].bounds
                 xs += [b[0], b[2]]; ys += [b[1], b[3]]
         if xs:
@@ -1888,24 +1932,130 @@ class GerberEditor(tk.Tk):
         win = tk.Toplevel(self)
         win.title("Editor de conversión")
         win.configure(bg="#252535")
-        win.geometry("860x640")
+        win.geometry(f"{min(1200, self.winfo_screenwidth()-60)}x{min(900, self.winfo_screenheight()-100)}")
+        win.minsize(850, 600)
         win.resizable(True, True)
         self._conv_editor = win
 
         # ── Parámetros (izquierda) ──
-        left = tk.Frame(win, bg="#252535", width=220)
-        left.pack(side="left", fill="y", padx=10, pady=10)
-        left.pack_propagate(False)
+        from tkinter import font as tkfont
+        control_font = ("Segoe UI", 11)
+        label_font = ("Segoe UI", 10, "bold")
+        sidebar_width = max(310, tkfont.Font(win, font=control_font).measure("Dithering Floyd-Steinberg") + 55)
+        sidebar = tk.Frame(win, bg="#252535", width=sidebar_width)
+        sidebar.pack(side="left", fill="y", padx=10, pady=10)
+        sidebar.pack_propagate(False)
+        actions = tk.Frame(sidebar, bg="#252535")
+        actions.pack(side="bottom", fill="x")
+        scroller = tk.Canvas(sidebar, bg="#252535", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(sidebar, orient="vertical", command=scroller.yview)
+        scrollbar.pack(side="right", fill="y")
+        scroller.pack(side="left", fill="both", expand=True)
+        scroller.configure(yscrollcommand=scrollbar.set)
+        left = tk.Frame(scroller, bg="#252535")
+        controls_id = scroller.create_window(0, 0, window=left, anchor="nw")
+        left.bind("<Configure>", lambda e: scroller.configure(scrollregion=scroller.bbox("all")))
+        scroller.bind("<Configure>", lambda e: scroller.itemconfigure(controls_id, width=e.width))
+        def scroll_controls(event):
+            widget = event.widget
+            while widget is not None:
+                if widget is sidebar:
+                    scroller.yview_scroll(-1 if event.delta > 0 else 1, "units")
+                    return "break"
+                widget = getattr(widget, 'master', None)
+        win.bind("<MouseWheel>", scroll_controls, add="+")
 
         def lbl(text, fg="#ccccdd"):
             tk.Label(left, text=text, bg="#252535", fg=fg,
-                     font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(8,1))
+                     font=label_font, wraplength=sidebar_width-35, justify="left",
+                     anchor="w").pack(fill="x", pady=(8,1))
         def sep():
             tk.Frame(left, bg="#444466", height=1).pack(fill="x", pady=4)
 
+        value_hint = "Enter confirma · Se admite coma decimal"
+        value_status = tk.StringVar(win, value=value_hint)
+        numeric_controls = []
+
+        def numeric_control(variable, minimum, maximum, step, default, name, title):
+            # El texto en edición se mantiene separado del valor numérico válido.
+            # Borrar un campo o escribir una coma nunca rompe el render/exportación.
+            row = tk.Frame(left, bg="#252535", name=name+"_control")
+            row.pack(fill="x", pady=(2, 0))
+            row.grid_columnconfigure(1, weight=1)
+            text = tk.StringVar(win)
+            def sync_text(*_):
+                value = variable.get()
+                text.set(str(int(value)) if step == 1 else f"{value:.2f}".replace('.', ','))
+            sync_text()
+            variable.trace_add('write', sync_text)
+
+            entry = tk.Entry(row, textvariable=text, name="value", width=7,
+                             justify="center", bg="#1a1a2e", fg="white",
+                             insertbackground="white", font=control_font)
+            entry.grid(row=0, column=1, sticky="ew", padx=4)
+
+            def commit(event=None, revert=False):
+                try:
+                    value = float(text.get().strip().replace(',', '.'))
+                    if not math.isfinite(value): raise ValueError()
+                except ValueError:
+                    if revert:
+                        sync_text()
+                        entry.configure(bg="#1a1a2e")
+                        value_status.set(value_hint)
+                    else:
+                        entry.configure(bg="#71353b")
+                        value_status.set(f"{title}: introduce un número válido")
+                        entry.focus_set()
+                    return False
+                value = max(minimum, min(maximum, value))
+                value = int(round(value)) if step == 1 else round(value, 2)
+                changed = value != variable.get()
+                variable.set(value)
+                sync_text()
+                entry.configure(bg="#1a1a2e")
+                value_status.set(value_hint)
+                if changed: refresh(fast=False)
+                return True
+
+            def nudge(direction):
+                # Confirmar un número escrito antes de hacer el ajuste fino.
+                if not commit(): return "break"
+                text.set(str(variable.get() + direction*step))
+                commit()
+                return "break"
+
+            def reset():
+                text.set(str(default))
+                commit()
+
+            buttons = []
+            for column, caption, command in ((0, "−", lambda: nudge(-1)),
+                                              (2, "+", lambda: nudge(1)),
+                                              (3, "Restablecer", reset)):
+                button = tk.Button(row, text=caption, command=command,
+                                   bg="#3a3a5c", fg="white", relief="flat",
+                                   font=("Segoe UI", 10), padx=6,
+                                   repeatdelay=350, repeatinterval=80)
+                button.grid(row=0, column=column)
+                buttons.append(button)
+            entry.bind("<Return>", lambda e: (commit(), "break")[1])
+            entry.bind("<FocusOut>", lambda e: commit(revert=True))
+            entry.bind("<Up>", lambda e: nudge(1))
+            entry.bind("<Down>", lambda e: nudge(-1))
+            scale = tk.Scale(left, variable=variable, from_=minimum, to=maximum,
+                             resolution=step, orient="horizontal", showvalue=False,
+                             bg="#252535", fg="white", troughcolor="#1a1a2e",
+                             font=control_font, highlightthickness=0,
+                             command=lambda v: refresh(fast=True))
+            scale.pack(fill="x")
+            control = {'commit': commit, 'entry': entry, 'widgets': [entry, scale, *buttons]}
+            numeric_controls.append(control)
+            return control
+
         # Algoritmo
         lbl("Algoritmo de conversión")
-        algo_var = tk.StringVar(value="threshold")
+        algo_var = tk.StringVar(value=getattr(self, '_conv_algo', 'threshold'))
         algos = [
             ("Umbral simple",       "threshold"),
             ("Dithering Floyd-Steinberg", "floyd"),
@@ -1918,17 +2068,18 @@ class GerberEditor(tk.Tk):
         for txt, val in algos:
             tk.Radiobutton(left, text=txt, variable=algo_var, value=val,
                            bg="#252535", fg="#ddddee", selectcolor="#1a1a2e",
-                           activebackground="#252535", font=("Segoe UI", 8),
-                           anchor="w", command=lambda: win.after(50, refresh)
+                           activebackground="#252535", font=control_font,
+                           anchor="w", command=lambda: algorithm_changed()
                            ).pack(fill="x", padx=4)
 
         sep()
-        lbl("Umbral (para umbral simple)")
+        lbl("Umbral (0–255)")
         thresh_var = tk.IntVar(value=self.overlay_threshold.get())
-        tk.Scale(left, variable=thresh_var, from_=0, to=255, orient="horizontal",
-                 bg="#252535", fg="white", troughcolor="#1a1a2e",
-                 highlightthickness=0, command=lambda v: refresh(fast=True)
-                 ).pack(fill="x")
+        threshold_control = numeric_control(thresh_var, 0, 255, 1, 128, 'threshold', 'Umbral')
+        threshold_hint = tk.Label(left, bg="#252535", fg="#88aacc", height=2,
+                                  font=("Segoe UI", 9), wraplength=sidebar_width-35,
+                                  justify="left", anchor="w")
+        threshold_hint.pack(fill="x")
 
         sep()
         # Tamaño real de la imagen en la PCB
@@ -1952,34 +2103,44 @@ class GerberEditor(tk.Tk):
             c = max(1, int(round(w_mm/px))); r = max(1, int(round(h_mm/px)))
             return f"{c}×{r} px"
 
-        pxsize_var = tk.DoubleVar(value=min(max(min_px, float(self.entry_dot.get())), max_px))
-        px_scale = tk.Scale(left, variable=pxsize_var, from_=min_px, to=max_px,
-                            resolution=0.01, orient="horizontal",
-                            bg="#252535", fg="white", troughcolor="#1a1a2e",
-                            highlightthickness=0, command=lambda v: refresh(fast=True))
-        px_scale.pack(fill="x")
-        px_info = tk.Label(left, text="", bg="#252535", fg="#ffcc44", font=("Segoe UI", 8))
+        pxsize_var = tk.DoubleVar(value=min(max(min_px, getattr(self, '_conv_pxsize', float(self.entry_dot.get()))), max_px))
+        numeric_control(pxsize_var, min_px, max_px, .01, min_px, 'pixel', 'Píxel')
+        px_info = tk.Label(left, text="", height=2, bg="#252535", fg="#ffcc44", font=("Segoe UI", 10))
         px_info.pack()
 
         sep()
-        lbl("Contraste / Gamma")
+        lbl("Contraste (1,00 = original)")
         contrast_var = tk.DoubleVar(value=getattr(self, '_conv_contrast', 1.0))
-        tk.Scale(left, variable=contrast_var, from_=0.3, to=3.0, resolution=0.05,
-                 orient="horizontal", bg="#252535", fg="white", troughcolor="#1a1a2e",
-                 highlightthickness=0, command=lambda v: refresh(fast=True)
-                 ).pack(fill="x")
+        numeric_control(contrast_var, .3, 3.0, .01, 1.0, 'contrast', 'Contraste')
+
+        def algorithm_changed(render=True):
+            bayer = algo_var.get() in ('bayer4', 'bayer8')
+            for widget in threshold_control['widgets']:
+                widget.configure(state='disabled' if bayer else 'normal')
+            threshold_hint.configure(text="Bayer usa una trama fija. Ajusta contraste y píxel."
+                                     if bayer else "Un umbral mayor añade tinta; uno menor la reduce.")
+            if render: refresh(fast=True)
+        algorithm_changed(render=False)
 
         sep()
-        lbl("Inversión de imagen")
+        lbl("Qué zonas reciben tinta blanca")
         invert_var = tk.BooleanVar(value=getattr(self, '_conv_invert', False))
-        tk.Checkbutton(left, text="Invertir negro/blanco", variable=invert_var,
-                       bg="#252535", fg="#ddddee", selectcolor="#1a1a2e",
-                       activebackground="#252535", font=("Segoe UI", 8),
-                       command=lambda: refresh(fast=False)).pack(anchor="w")
+        for caption, value in (("Claros → tinta blanca (foto positiva)", True),
+                               ("Oscuros → tinta blanca (foto negativa)", False)):
+            tk.Radiobutton(left, text=caption, variable=invert_var, value=value,
+                           bg="#252535", fg="#ddddee", selectcolor="#1a1a2e",
+                           activebackground="#252535", font=control_font,
+                           wraplength=sidebar_width-35, justify="left", anchor="w",
+                           command=lambda: refresh(fast=False)).pack(fill="x")
 
         sep()
+        tk.Label(actions, textvariable=value_status, bg="#252535", fg="#ffcc44",
+                 font=("Segoe UI", 9), height=2, wraplength=sidebar_width-35,
+                 justify="left").pack(fill="x")
         # Botón aplicar: transfiere los parámetros a la ventana principal
         def apply_to_main():
+            for control in numeric_controls:
+                if not control['commit'](): return
             self.overlay_threshold.set(thresh_var.get())
             # El trazo de exportación siempre es 0.15mm (JLCPCB)
             self.entry_dot.delete(0, "end")
@@ -1990,17 +2151,18 @@ class GerberEditor(tk.Tk):
             self._conv_pxsize = pxsize_var.get()   # tamaño de píxel para dithering
             self._overlay_cache_key = None
             self._redraw()
+            refresh(fast=False)
             messagebox.showinfo("Aplicado",
                 f"Exportación: trazo 0.15mm (JLCPCB)\n"
                 f"Dithering: píxel {pxsize_var.get():.2f}mm · {algo_var.get()}\n"
                 f"Contraste: {contrast_var.get():.2f}", parent=win)
 
-        tk.Button(left, text="✅ Aplicar a exportación", command=apply_to_main,
+        tk.Button(actions, text="✅ Aplicar a PCB y exportación", command=apply_to_main,
                   bg="#2244aa", fg="white", relief="flat",
-                  font=("Segoe UI", 9, "bold"), pady=6).pack(fill="x", pady=(8,2))
-        tk.Button(left, text="Cerrar", command=win.destroy,
+                  font=("Segoe UI", 11, "bold"), pady=6).pack(fill="x", pady=(8,2))
+        tk.Button(actions, text="Cerrar", command=win.destroy,
                   bg="#3a3a5c", fg="white", relief="flat",
-                  font=("Segoe UI", 8), pady=4).pack(fill="x")
+                  font=control_font, pady=4).pack(fill="x")
 
         # ── Preview (derecha) ──
         right = tk.Frame(win, bg="#1a1a2e")
@@ -2009,288 +2171,215 @@ class GerberEditor(tk.Tk):
         top_bar = tk.Frame(right, bg="#1a1a2e")
         top_bar.pack(fill="x", pady=(0,4))
         tk.Label(top_bar, text="Original", bg="#1a1a2e", fg="#aaaacc",
-                 font=("Segoe UI", 8)).pack(side="left", padx=8)
-        tk.Label(top_bar, text="Resultado Gerber", bg="#1a1a2e", fg="#ffcc44",
-                 font=("Segoe UI", 8)).pack(side="right", padx=8)
+                 font=control_font).pack(side="left", padx=8)
+        tk.Label(top_bar, text="Resultado · tinta blanca", bg="#1a1a2e", fg="#ffcc44",
+                 font=control_font).pack(side="right", padx=8)
 
         preview_frame = tk.Frame(right, bg="#1a1a2e")
         preview_frame.pack(fill="both", expand=True)
 
-        lbl_orig = tk.Label(preview_frame, bg="#000000")
-        lbl_orig.pack(side="left", fill="both", expand=True, padx=2)
-        lbl_conv = tk.Label(preview_frame, bg="#000000")
-        lbl_conv.pack(side="right", fill="both", expand=True, padx=2)
+        # Las imágenes no deben determinar el tamaño de su propia vista previa.
+        # Cada mitad conserva su espacio aunque cambie la resolución del resultado.
+        preview_frame.grid_columnconfigure((0, 1), weight=1, uniform="preview")
+        preview_frame.grid_rowconfigure(0, weight=1)
+        viewports = []
+        for column in (0, 1):
+            viewport = tk.Frame(preview_frame, bg="#000000", width=1, height=1)
+            viewport.grid(row=0, column=column, sticky="nsew", padx=2)
+            viewport.grid_propagate(False)
+            viewports.append(viewport)
+        lbl_orig = tk.Label(viewports[0], bg="#000000", borderwidth=0)
+        lbl_orig.place(relx=.5, rely=.5, anchor="center")
+        lbl_conv = tk.Label(viewports[1], bg="#000000", borderwidth=0)
+        lbl_conv.place(relx=.5, rely=.5, anchor="center")
 
         info_lbl = tk.Label(right, text="", bg="#1a1a2e", fg="#888899",
-                            font=("Segoe UI", 7))
-        info_lbl.pack(pady=2)
+                            font=("Segoe UI", 10), width=1, height=3)
+        info_lbl.pack(fill="x", pady=2)
 
         self._conv_refresh_id = None
         self._conv_quality_id = None
 
-        def refresh(fast=True):
-            # Cancelar renders pendientes
+        def cancel_pending():
             for attr in ('_conv_refresh_id', '_conv_quality_id'):
                 rid = getattr(self, attr, None)
                 if rid:
                     try: win.after_cancel(rid)
-                    except: pass
+                    except tk.TclError: pass
                 setattr(self, attr, None)
+
+        def refresh(fast=True):
+            cancel_pending()
+            if not win.winfo_exists(): return
+
+            def render(fast, timer_attr):
+                setattr(self, timer_attr, None)
+                if not win.winfo_exists(): return
+                try: _render_preview(fast=fast)
+                except Exception as e: info_lbl.config(text=f"Error: {e}")
 
             # Render rápido inmediato (baja res, umbral simple)
             if fast:
-                def do_fast():
-                    if not win.winfo_exists(): return
-                    try: _render_preview(fast=True)
-                    except Exception as e: info_lbl.config(text=f"Error: {e}")
-                self._conv_refresh_id = win.after(30, do_fast)
+                self._conv_refresh_id = win.after(30, lambda: render(True, '_conv_refresh_id'))
                 # Full quality 400ms después de que el usuario suelte
-                def do_full():
-                    if not win.winfo_exists(): return
-                    try: _render_preview(fast=False)
-                    except Exception as e: info_lbl.config(text=f"Error: {e}")
-                self._conv_quality_id = win.after(420, do_full)
+                self._conv_quality_id = win.after(420, lambda: render(False, '_conv_quality_id'))
             else:
-                def do_full():
-                    if not win.winfo_exists(): return
-                    try: _render_preview(fast=False)
-                    except Exception as e: info_lbl.config(text=f"Error: {e}")
-                self._conv_refresh_id = win.after(30, do_full)
+                self._conv_refresh_id = win.after(30, lambda: render(False, '_conv_refresh_id'))
 
         def _render_preview(fast=False):
-            from PIL import Image as PILImg, ImageEnhance, ImageOps
+            from PIL import Image as PILImg, ImageTk as PILImageTk
             import numpy as np
-
-            PW = max(1, (right.winfo_width() // 2) - 10) or 300
-            PH = max(1, right.winfo_height() - 60) or 300
-
-            # Imagen original (rotada si procede)
-            img = self.overlay_image.copy()
-            angle = self.overlay_angle_deg
-            import math as _m
-            if angle % 360 != 0:
-                img = img.rotate(-angle, expand=True, resample=PILImg.BICUBIC)
-
-            # Aplicar contraste/gamma
-            img_enh = img.convert("L")
-            if contrast_var.get() != 1.0:
-                img_enh = ImageEnhance.Contrast(img_enh).enhance(contrast_var.get())
-            if invert_var.get():
-                img_enh = ImageOps.invert(img_enh)
-
-            # Preview original (escalado a PW×PH)
-            orig_disp = img_enh.copy()
-            orig_disp.thumbnail((PW, PH), PILImg.LANCZOS)
-            orig_disp = orig_disp.convert("RGB")
-
-            # Calcular resolución en píxeles basada en tamaño de píxel visual
-            dot = max(self.JLCPCB_MIN_MM, pxsize_var.get())
-            w_mm_r = self.overlay_w_mm; h_mm_r = self.overlay_h_mm
-            if angle % 360 != 0:
-                rad = _m.radians(angle); cv, sv = abs(_m.cos(rad)), abs(_m.sin(rad))
-                w_mm_r, h_mm_r = w_mm_r*cv+h_mm_r*sv, w_mm_r*sv+h_mm_r*cv
-            cols = max(4, int(round(w_mm_r / dot)))
-            rows = max(4, int(round(h_mm_r / dot)))
-
-            # En modo rápido: limitar a 150px y usar umbral simple
-            MAX_FAST = 150; MAX_FULL = 600
-            max_p = MAX_FAST if fast else MAX_FULL
-            if cols > max_p or rows > max_p:
-                f = max_p / max(cols, rows)
-                cols = max(4, int(cols*f)); rows = max(4, int(rows*f))
-
-            small = img_enh.resize((cols, rows), PILImg.BILINEAR if fast else PILImg.LANCZOS)
-            arr = np.array(small, dtype=np.float32)
-
-            algo = algo_var.get()
-            thresh = thresh_var.get()
-
-            # Modo rápido: umbral simple siempre (los dithering error-diffusion son lentos)
-            if fast or algo == "threshold":
-                result = (arr < thresh).astype(np.uint8) * 255
-
-            elif algo == "floyd":
-                result = _dither_floyd(arr, thresh)
-
-            elif algo == "atkinson":
-                result = _dither_atkinson(arr, thresh)
-
-            elif algo == "bayer4":
-                result = _dither_bayer(arr, 4)
-
-            elif algo == "bayer8":
-                result = _dither_bayer(arr, 8)
-
-            elif algo == "stucki":
-                result = _dither_error(arr, thresh, "stucki")
-
-            elif algo == "jarvis":
-                result = _dither_error(arr, thresh, "jarvis")
-
-            else:
-                result = (arr < thresh).astype(np.uint8) * 255
-
-            # Resultado como imagen visualizable
-            # Mostrar resultado manteniendo aspect ratio (igual que la imagen original)
-            res_img = PILImg.fromarray((255 - result).astype(np.uint8), "L").convert("RGB")
-            res_img.thumbnail((PW, PH), PILImg.NEAREST)
-
-            from PIL import ImageTk as PILImageTk
-            tk_orig = PILImageTk.PhotoImage(orig_disp)
-            tk_conv = PILImageTk.PhotoImage(res_img)
+            PW = max(1, min(viewport.winfo_width() for viewport in viewports)-4)
+            PH = max(1, preview_frame.winfo_height()-4)
+            raster = self._logo_raster(thresh_var.get(), algorithm=algo_var.get(),
+                                      contrast=contrast_var.get(), invert=invert_var.get(),
+                                      pixel_mm=pxsize_var.get(), limit=150 if fast else 600)
+            width, height = raster['width_mm'], raster['height_mm']
+            scale = min(PW/width, PH/height)
+            display_size = (max(1, int(width*scale)), max(1, int(height*scale)))
+            original = raster['original'].convert('RGB').resize(display_size, PILImg.LANCZOS)
+            # Máscara de material: blanco es tinta, negro es placa sin tinta.
+            result = raster['mask'].convert('RGB').resize(display_size, PILImg.NEAREST)
+            tk_orig, tk_conv = PILImageTk.PhotoImage(original), PILImageTk.PhotoImage(result)
             lbl_orig.config(image=tk_orig); lbl_orig.image = tk_orig
             lbl_conv.config(image=tk_conv); lbl_conv.image = tk_conv
-
-            dark_px = int(np.sum(result > 128))
-            exp_cols = max(1, int(round(w_mm_r / self.JLCPCB_MIN_MM)))
-            exp_rows = max(1, int(round(h_mm_r / self.JLCPCB_MIN_MM)))
-            px_info.config(text=f"Píxel visual: {dot:.2f}mm → {cols}×{rows} px\n"
+            cols, rows = raster['mask'].size
+            exp_cols, exp_rows = max(1, round(width/self.JLCPCB_MIN_MM)), max(1, round(height/self.JLCPCB_MIN_MM))
+            px_info.config(text=f"Píxel visual: {raster['pixel_mm']:.2f}mm → {cols}×{rows} px\n"
                                  f"Exportación: 0.15mm → {exp_cols}×{exp_rows} px")
-            quality_note = "  ⚡ vista rápida…" if fast else ""
-            info_lbl.config(text=f"Puntos de tinta: {dark_px}  ·  "
-                                  f"Algoritmo: {algo_var.get()}{quality_note}")
+            applied = (thresh_var.get() == self.overlay_threshold.get()
+                       and algo_var.get() == getattr(self, '_conv_algo', 'threshold')
+                       and contrast_var.get() == getattr(self, '_conv_contrast', 1.0)
+                       and invert_var.get() == getattr(self, '_conv_invert', False)
+                       and pxsize_var.get() == getattr(self, '_conv_pxsize', float(self.entry_dot.get())))
+            state = "Aplicado a PCB y exportación" if applied else "Vista sin aplicar · pulsa Aplicar a PCB y exportación"
+            quality = " · vista rápida" if fast else ""
+            info_lbl.config(text=f"Blanco = tinta · Negro = PCB sin tinta{quality}\n{state}\n"
+                                 f"Puntos de tinta: {np.count_nonzero(np.array(raster['mask']))} · {algo_var.get()}")
 
-        # ── Algoritmos de dithering ──
-        def _dither_floyd(arr, thresh):
-            import numpy as np
-            a = arr.copy().astype(np.float32)
-            h, w = a.shape
-            out = np.zeros_like(a, dtype=np.uint8)
-            for y in range(h):
-                for x in range(w):
-                    old = a[y, x]
-                    new = 0.0 if old < thresh else 255.0
-                    out[y, x] = int(new)
-                    err = old - new
-                    if x+1 < w:   a[y,x+1]   += err * 7/16
-                    if y+1 < h:
-                        if x-1 >= 0: a[y+1,x-1] += err * 3/16
-                        a[y+1,x]   += err * 5/16
-                        if x+1 < w:  a[y+1,x+1] += err * 1/16
-            return out
+        # Configure en un Toplevel también recibe los cambios de sus hijos.
+        # Escuchar solo el área de preview evita que dibujar dispare otro render.
+        preview_size = None
+        def preview_resized(event):
+            nonlocal preview_size
+            size = (event.width, event.height)
+            if event.widget is preview_frame and size != preview_size:
+                preview_size = size
+                refresh(fast=True)
 
-        def _dither_atkinson(arr, thresh):
-            import numpy as np
-            a = arr.copy().astype(np.float32)
-            h, w = a.shape
-            out = np.zeros_like(a, dtype=np.uint8)
-            for y in range(h):
-                for x in range(w):
-                    old = a[y, x]
-                    new = 0.0 if old < thresh else 255.0
-                    out[y, x] = int(new)
-                    err = (old - new) / 8
-                    for dy, dx in [(0,1),(0,2),(1,-1),(1,0),(1,1),(2,0)]:
-                        ny, nx = y+dy, x+dx
-                        if 0 <= ny < h and 0 <= nx < w:
-                            a[ny, nx] += err
-            return out
+        def editor_destroyed(event):
+            if event.widget is win:
+                cancel_pending()
 
-        def _dither_bayer(arr, n):
-            import numpy as np
-            def bayer_matrix(n):
-                if n == 1: return np.array([[0]])
-                m = bayer_matrix(n//2)
-                return np.bmat([[4*m, 4*m+2], [4*m+3, 4*m+1]]).A / (n*n)
-            bm = bayer_matrix(n) * 255
-            h, w = arr.shape
-            tiled = np.tile(bm, (h//n+1, w//n+1))[:h, :w]
-            return ((arr < tiled) * 255).astype(np.uint8)
-
-        def _dither_error(arr, thresh, method):
-            import numpy as np
-            if method == "stucki":
-                kernel = [(0,1,8),(0,2,4),(1,-2,2),(1,-1,4),(1,0,8),(1,1,4),(1,2,2),(2,-2,1),(2,-1,2),(2,0,4),(2,1,2),(2,2,1)]
-                div = 42
-            else:  # jarvis
-                kernel = [(0,1,7),(0,2,5),(1,-2,3),(1,-1,5),(1,0,7),(1,1,5),(1,2,3),(2,-2,1),(2,-1,3),(2,0,5),(2,1,3),(2,2,1)]
-                div = 48
-            a = arr.copy().astype(np.float32)
-            h, w = a.shape
-            out = np.zeros_like(a, dtype=np.uint8)
-            for y in range(h):
-                for x in range(w):
-                    old = a[y,x]
-                    new = 0.0 if old < thresh else 255.0
-                    out[y,x] = int(new)
-                    err = old - new
-                    for dy,dx,wt in kernel:
-                        ny,nx = y+dy, x+dx
-                        if 0<=ny<h and 0<=nx<w:
-                            a[ny,nx] += err * wt / div
-            return out
-
-        # Conectar resize a refresh
-        win.bind("<Configure>", lambda e: refresh(fast=True))
-        # Render inicial
-        win.after(100, lambda: refresh(fast=False))
+        preview_frame.bind("<Configure>", preview_resized)
+        win.bind("<Destroy>", editor_destroyed, add="+")
+        refresh(fast=False)
 
     def export_gerber(self):
         if not self.gerber_layers:
             messagebox.showwarning("Aviso", "Primero carga al menos una capa Gerber.")
             return
-
-        # Construir la lista unificada de items exportables (todas las capas + targets nuevos)
-        items = self._build_export_items()
-        choices = self._choose_export_dialog(items)
+        choices = self._choose_export_dialog(self._build_export_items())
         if not choices:
             return
-
-        out_dir = filedialog.askdirectory(title="Carpeta donde guardar las capas exportadas")
-        if not out_dir:
+        source = getattr(self, 'fabrication_source', None)
+        destination = Path(source).parent if source else filedialog.askdirectory(
+            title="Carpeta donde crear el nuevo paquete Gerber y ZIP")
+        if not destination:
             return
-
-        thresh = self.overlay_threshold.get()
-
-        results = []
         try:
-            for ch in choices:
-                item = ch["item"]
-                mode = ch["mode"]
-                clr = ch.get("clearance", 0.5)   # holgura específica de esta capa
-                tag = item["tag"]
-                ext = item["ext"]
-                out_path = str(Path(out_dir) / f"{tag}{ext}")
+            from fabrication_export import FabricationExport
+            baseline = {}
+            def add_original(name, content):
+                name = Path(name).name
+                data = content.encode('utf-8')
+                if name in baseline and baseline[name] != data:
+                    raise ValueError(f"Hay dos capas diferentes con el mismo nombre: {name}")
+                baseline[name] = data
+            for entry in self.gerber_layers:
+                add_original(entry['name'], ''.join(entry['layer'].raw_lines))
+            drill_formats = {}
+            for ref in getattr(self, 'drill_references', []):
+                add_original(ref.name, ref.content)
+                drill_formats[Path(ref.name).name] = list(ref.coord_format)
+            if not source and drill_formats:
+                formats = set(tuple(value) for value in drill_formats.values())
+                if len(formats) == 1:
+                    integer, decimal = formats.pop()
+                    add_original('nc_param.txt', f'INTEGER-PLACES {integer}\nDECIMAL-PLACES {decimal}\n')
+            changes, results = [], []
+            with FabricationExport(destination, baseline, source) as package:
+                for choice in choices:
+                    item = choice['item']
+                    name = f"{item['tag']}{item['ext']}"
+                    output = package.path_for(name)
+                    results.append(self._write_export_layer(choice, str(output), self.overlay_threshold.get()))
+                    changes.append({'file': output.relative_to(package.work).as_posix(),
+                                    'mode': choice['mode'], 'clearance_mm': choice.get('clearance', .5)})
+                settings = {'algorithm': getattr(self, '_conv_algo', 'threshold'),
+                            'threshold': self.overlay_threshold.get(),
+                            'contrast': getattr(self, '_conv_contrast', 1.0),
+                            'invert': getattr(self, '_conv_invert', False),
+                            'pixel_mm': getattr(self, '_conv_pxsize', .15),
+                            'x_mm': self.overlay_x_mm, 'y_mm': self.overlay_y_mm,
+                            'width_mm': self.overlay_w_mm, 'height_mm': self.overlay_h_mm,
+                            'angle_deg': self.overlay_angle_deg}
+                folder, archive = package.finish(changes, settings, drill_formats)
+            self.last_export_zip, self.last_export_folder = archive, folder
+            messagebox.showinfo("Exportado", "✅ Paquete y ZIP nuevos:\n\n" + str(archive)
+                                + "\n\n" + "\n".join(results), parent=self)
+            return archive
+        except Exception as error:
+            messagebox.showerror("Error de exportación", str(error), parent=self)
 
-                if mode == "base":
-                    # Exportar la capa cargada tal cual (sin logo)
-                    item["base_entry"]["layer"].export_with_overlay([], out_path)
-                    results.append(f"• {Path(out_path).name}  (solo base)")
+    def _write_export_layer(self, ch, out_path, thresh):
+        results = []
+        if ch['mode'] != 'base' and self.overlay_image is None:
+            raise ValueError('Importa una imagen antes de exportar una receta con logo.')
+        item = ch["item"]
+        mode = ch["mode"]
+        clr = ch.get("clearance", 0.5)   # holgura específica de esta capa
+        tag = item["tag"]
+        ext = item["ext"]
 
-                elif mode in ("merge", "clearance", "new", "under", "logo_windows"):
-                    if item["base_entry"] is not None:
-                        base_layer = item["base_entry"]["layer"]
-                    else:
-                        base = self._find_outline_layer() or self.gerber_layers[0]
-                        base_layer = base["layer"]
+        if mode == "base":
+            # Exportar la capa cargada tal cual (sin logo)
+            pass  # El paquete ya conserva los bytes de la capa original.
+            results.append(f"• {Path(out_path).name}  (solo base)")
 
-                    converter = ImageToGerber(base_layer)
-                    clearance = clr if mode == "clearance" else 0.0
-                    cmds = self._build_logo_cmds(converter, thresh, clearance)
+        elif mode in ("merge", "clearance", "new", "under", "logo_windows"):
+            if item["base_entry"] is not None:
+                base_layer = item["base_entry"]["layer"]
+            else:
+                base = self._find_outline_layer() or self.gerber_layers[0]
+                base_layer = base["layer"]
 
-                    if mode == "new" or item["base_entry"] is None:
-                        base_layer.export_new_layer(cmds, out_path, layer_name=tag)
-                        results.append(f"• {Path(out_path).name}  (nueva, solo logo)")
-                    elif mode == "clearance":
-                        base_layer.export_with_overlay(cmds, out_path, position="after")
-                        results.append(f"• {Path(out_path).name}  (logo con ventanas en base)")
-                    elif mode == "under":
-                        base_layer.export_with_overlay(cmds, out_path, position="before")
-                        results.append(f"• {Path(out_path).name}  (base encima del logo)")
-                    elif mode == "logo_windows":
-                        # Logo encima + base perfora el logo (clear ancho) + base redibujada
-                        clear_cmds = base_layer.emit_drawables(extra_mm=clr, polarity="C", dcode_start=200)
-                        redraw_cmds = base_layer.emit_drawables(extra_mm=0.0, polarity="D", dcode_start=300)
-                        combined = cmds + clear_cmds + redraw_cmds
-                        base_layer.export_with_overlay(combined, out_path, position="after")
-                        results.append(f"• {Path(out_path).name}  (logo con ventanas para la base)")
-                    else:  # merge
-                        base_layer.export_with_overlay(cmds, out_path, position="after")
-                        results.append(f"• {Path(out_path).name}  (logo encima de base)")
+            converter = ImageToGerber(base_layer)
+            clearance = clr if mode == "clearance" else 0.0
+            cmds = self._build_logo_cmds(converter, thresh, clearance)
 
-            messagebox.showinfo("Exportado", "✅ Capas exportadas:\n\n" + "\n".join(results))
-        except Exception as e:
-            messagebox.showerror("Error de exportación", str(e))
+            if mode == "new" or item["base_entry"] is None:
+                base_layer.export_new_layer(cmds, out_path, layer_name=tag)
+                results.append(f"• {Path(out_path).name}  (nueva, solo logo)")
+            elif mode == "clearance":
+                base_layer.export_with_overlay(cmds, out_path, position="after")
+                results.append(f"• {Path(out_path).name}  (logo con ventanas en base)")
+            elif mode == "under":
+                base_layer.export_with_overlay(cmds, out_path, position="before")
+                results.append(f"• {Path(out_path).name}  (base encima del logo)")
+            elif mode == "logo_windows":
+                # Logo encima + base perfora el logo (clear ancho) + base redibujada
+                clear_cmds = base_layer.emit_drawables(extra_mm=clr, polarity="C", dcode_start=200)
+                redraw_cmds = base_layer.emit_drawables(extra_mm=0.0, polarity="D", dcode_start=300)
+                combined = cmds + clear_cmds + redraw_cmds
+                base_layer.export_with_overlay(combined, out_path, position="after")
+                results.append(f"• {Path(out_path).name}  (logo con ventanas para la base)")
+            else:  # merge
+                base_layer.export_with_overlay(cmds, out_path, position="after")
+                results.append(f"• {Path(out_path).name}  (logo encima de base)")
+        if not results:
+            raise ValueError(f"Modo de exportación no reconocido: {ch['mode']}")
+        return results[0]
 
     def _preview_layer(self, item, mode, parent=None, clearance=None):
         """Renderiza una preview de cómo quedará la capa (base + logo según modo)."""
@@ -2315,8 +2404,11 @@ class GerberEditor(tk.Tk):
         PH = int(gh * scale)
         clearance_px = max(1, int(round(clearance_mm * scale)))
 
-        # Lienzo negro
-        canvas_img = PILImage.new("RGB", (PW, PH), (40, 15, 20))
+        is_silk = ('SILK' in (item['tag']+' '+item['label']).upper()
+                   or item['ext'].lower() in {'.gto', '.gbo'})
+        # Serigrafía física blanca sobre placa negra; cobre conserva su paleta.
+        background = (0, 0, 0) if is_silk else (40, 15, 20)
+        canvas_img = PILImage.new("RGB", (PW, PH), background)
         draw = PILDraw.Draw(canvas_img)
 
         def to_px(xmm, ymm):
@@ -2351,23 +2443,13 @@ class GerberEditor(tk.Tk):
 
         # Imagen del logo binarizada y posicionada
         def logo_mask():
-            thresh = self.overlay_threshold.get()
-            img = self.overlay_image.convert("L")
-            angle = self.overlay_angle_deg
-            w_mm, h_mm = self.overlay_w_mm, self.overlay_h_mm
-            cx = self.overlay_x_mm + w_mm/2
-            cy = self.overlay_y_mm + h_mm/2
-            # Tamaño en px de preview
-            disp_w = max(2, int(w_mm * scale))
-            disp_h = max(2, int(h_mm * scale))
-            small = img.resize((disp_w, disp_h), PILImage.BILINEAR)
-            arr = np.array(small) < thresh
-            mimg = PILImage.fromarray((arr*255).astype(np.uint8), "L")
-            if angle % 360 != 0:
-                mimg = mimg.rotate(-angle, expand=True, resample=PILImage.NEAREST)
-            # Posición: centrado en (cx,cy)
-            mcx, mcy = to_px(cx, cy)
-            return mimg, mcx, mcy
+            raster = self._logo_raster()
+            width = max(1, round(raster['width_mm']*scale))
+            height = max(1, round(raster['height_mm']*scale))
+            mask = raster['mask'].resize((width, height), PILImage.NEAREST)
+            cx = self.overlay_x_mm+self.overlay_w_mm/2
+            cy = self.overlay_y_mm+self.overlay_h_mm/2
+            return mask, *to_px(cx, cy)
 
         mimg, mcx, mcy = logo_mask()
         mw, mh = mimg.size
@@ -2377,7 +2459,11 @@ class GerberEditor(tk.Tk):
         logo_color = (255, 200, 40)   # logo en cobre (dorado brillante)
         base_color = (210, 130, 40)   # trazas en cobre
         pour_color = (150, 80, 30)    # plano de cobre (pour), tono cobre apagado
-        bg = (40, 15, 20)             # board sin cobre (hueco/gap), rojo muy oscuro
+        bg = background
+        if is_silk:
+            logo_color = (255, 255, 255)
+            base_color = (220, 220, 220)
+            pour_color = (160, 160, 160)
 
         if mode == "under":
             # Logo primero, base encima (pour apagado + trazas + logo perforado por base)
@@ -2436,7 +2522,9 @@ class GerberEditor(tk.Tk):
         lbl = tk.Label(win, image=tkimg, bg="#1e1e2e")
         lbl.image = tkimg
         lbl.pack(padx=8, pady=4)
-        tk.Label(win, text="Dorado = logo en cobre  ·  Cobre = plano/trazas  ·  Oscuro = sin cobre (gap)",
+        legend = ("Blanco = tinta de serigrafía · Negro = PCB sin tinta" if is_silk else
+                  "Dorado = logo en cobre · Cobre = plano/trazas · Oscuro = sin cobre (gap)")
+        tk.Label(win, text=legend,
                  bg="#1e1e2e", fg="#aaaacc", font=("Segoe UI", 8)).pack(pady=(0, 4))
 
         def close_preview():
@@ -2561,6 +2649,9 @@ class GerberEditor(tk.Tk):
                            "Puedes cambiarlas por capa.",
                  bg="#252535", fg="#8888aa", font=("Segoe UI", 8)).pack(padx=14, anchor="w")
 
+        tk.Label(dlg, text="Se crea un ZIP nuevo. Sin marcar: se conserva la capa original.",
+                 bg="#252535", fg="#88aacc", font=("Segoe UI", 8)).pack(padx=14, anchor="w")
+
         canvas_box = tk.Frame(dlg, bg="#252535")
         canvas_box.pack(fill="both", expand=True, padx=14, pady=6)
 
@@ -2585,13 +2676,18 @@ class GerberEditor(tk.Tk):
             return ("merge", 0.5)
 
         rows = []
+        preferences = getattr(self, '_export_preferences', {})
+        def preference_key(item):
+            return (item['label'], item['tag'], item['ext'], item['is_new'])
         for item in items:
             row = tk.Frame(canvas_box, bg="#1e1e2e", pady=4)
             row.pack(fill="x", pady=2)
 
-            exp_var = tk.BooleanVar(value=item["has_logo"] or not item["is_new"])
-            tk.Checkbutton(row, variable=exp_var, bg="#1e1e2e", selectcolor="#0a0a1a",
-                           activebackground="#1e1e2e").pack(side="left")
+            saved = preferences.get(preference_key(item), {})
+            exp_var = tk.BooleanVar(master=dlg, value=saved.get('selected', item["has_logo"] or not item["is_new"]))
+            tk.Checkbutton(row, variable=exp_var, onvalue=True, offvalue=False,
+                           bg="#1e1e2e", fg="#ffffff", selectcolor="#2244aa",
+                           activeforeground="#ffffff", activebackground="#1e1e2e").pack(side="left")
 
             txt = item["label"]
             if item["is_new"]:
@@ -2600,6 +2696,8 @@ class GerberEditor(tk.Tk):
                      font=("Segoe UI", 9), width=24, anchor="w").pack(side="left")
 
             def_mode, def_clr = recipe_for_item(item)
+            def_mode = saved.get('mode', def_mode)
+            def_clr = saved.get('clearance', def_clr)
 
             # Modo
             if item["base_entry"] is not None and item["has_logo"]:
@@ -2655,14 +2753,20 @@ class GerberEditor(tk.Tk):
                 if not ev.get():
                     continue
                 try:
-                    clr = float(cv.get())
+                    clr = float(cv.get().replace(',', '.'))
+                    if not math.isfinite(clr) or clr < 0: raise ValueError()
                 except ValueError:
-                    clr = 0.5
+                    messagebox.showwarning("Holgura", "Introduce una holgura válida, mayor o igual a cero.", parent=dlg)
+                    return
                 sel.append({"item": it, "mode": mv.get(), "clearance": clr})
             if not sel:
                 messagebox.showwarning("Aviso", "Marca al menos una capa.", parent=dlg)
                 return
             res["v"] = sel
+            self._export_preferences = {
+                preference_key(it): {'selected': ev.get(), 'mode': mv.get(),
+                                     'clearance': float(cv.get().replace(',', '.')) if ev.get() else preferences.get(preference_key(it), {}).get('clearance', 0.5)}
+                for ev, mv, cv, it in rows}
             dlg.destroy()
 
         btns = tk.Frame(dlg, bg="#252535"); btns.pack(side="bottom", fill="x", pady=12, padx=14)
@@ -3063,51 +3167,18 @@ class GerberEditor(tk.Tk):
         return res["v"]
 
     def _export_raster(self, converter, thresh, clearance_mm=0.0):
-        import math as _m
-        from PIL import ImageEnhance, ImageOps
-        try:
-            dot_size = float(self.entry_dot.get())
-        except ValueError:
-            dot_size = 0.15
-
-        w_mm = self.overlay_w_mm
-        h_mm = self.overlay_h_mm
-        cx = self.overlay_x_mm + w_mm / 2
-        cy = self.overlay_y_mm + h_mm / 2
-
-        img = self.overlay_image.copy()
-        angle = self.overlay_angle_deg
-
-        if angle % 360 != 0:
-            img = img.rotate(-angle, expand=True, resample=Image.BICUBIC)
-            rad = _m.radians(angle)
-            c, s = abs(_m.cos(rad)), abs(_m.sin(rad))
-            box_w = w_mm * c + h_mm * s
-            box_h = w_mm * s + h_mm * c
-        else:
-            box_w, box_h = w_mm, h_mm
-
-        x0 = cx - box_w / 2
-        y0 = cy - box_h / 2
-
-        # Aplicar parámetros del editor de conversión si están activos
-        algo = getattr(self, '_conv_algo', 'threshold')
-        contrast = getattr(self, '_conv_contrast', 1.0)
-        invert = getattr(self, '_conv_invert', False)
-        pxsize = getattr(self, '_conv_pxsize', dot_size)  # tamaño píxel para dithering
-
-        img_l = img.convert("L")
-        if contrast != 1.0:
-            img_l = ImageEnhance.Contrast(img_l).enhance(contrast)
-        if invert:
-            img_l = ImageOps.invert(img_l)
-
-        return converter.convert(
-            img_l, x0, y0, box_w, box_h,
-            threshold=thresh, dot_size_mm=dot_size,
-            clearance_mm=clearance_mm, dither_algo=algo,
-            dither_px_mm=pxsize
-        )
+        try: dot_size = max(.15, float(self.entry_dot.get()))
+        except ValueError: dot_size = .15
+        _, gray, width, height = _prepare_logo_image(
+            self.overlay_image, self.overlay_w_mm, self.overlay_h_mm,
+            self.overlay_angle_deg, getattr(self, '_conv_contrast', 1.0),
+            getattr(self, '_conv_invert', False))
+        cx = self.overlay_x_mm + self.overlay_w_mm/2
+        cy = self.overlay_y_mm + self.overlay_h_mm/2
+        return converter.convert(gray, cx-width/2, cy-height/2, width, height,
+            threshold=thresh, dot_size_mm=dot_size, clearance_mm=clearance_mm,
+            dither_algo=getattr(self, '_conv_algo', 'threshold'),
+            dither_px_mm=getattr(self, '_conv_pxsize', dot_size))
 
 
 # ─────────────────────────────────────────────
@@ -3119,6 +3190,10 @@ if __name__ == "__main__":
         print("ERROR: Pillow no está instalado. Ejecuta: pip install pillow")
         exit(1)
 
-    app = GerberEditor()
+    if Path(__file__).with_name('design_app.py').exists():
+        from design_app import DesignToolsApp
+        app = DesignToolsApp()
+    else:
+        app = GerberEditor()
     app.geometry("1200x750")
     app.mainloop()

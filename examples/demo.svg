@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="80.94mm" height="128.5mm" viewBox="0 0 80.94 128.5">
+<title>Frontal Eurorack 3U — Sputtering Design Tools</title>
+<g id="panel-outline" fill="none" stroke="#000" stroke-width="0.1">
+<rect x="0" y="0" width="80.94" height="128.5"/>
+</g>
+<g id="holes" fill="none" stroke="#000" stroke-width="0.1">
+<circle cx="7.5" cy="125.5" r="1.6"/>
+<circle cx="7.5" cy="3" r="1.6"/>
+<circle cx="73.54" cy="125.5" r="1.6"/>
+<circle cx="73.54" cy="3" r="1.6"/>
+<circle cx="25.47" cy="44.25" r="3.5"/>
+<circle cx="25.47" cy="89.25" r="3.25"/>
+<circle cx="55.47" cy="44.25" r="3.5"/>
+<circle cx="55.47" cy="89.25" r="3.25"/>
+</g>
+<g id="artwork" fill="#000" font-family="Arial, sans-serif" text-anchor="middle" dominant-baseline="central">
+<text x="40.47" y="15.5" font-size="4">DISTORTION</text>
+<text x="40.47" y="22.5" font-size="2">DEMO / PCB DE EJEMPLO</text>
+<text x="25.47" y="33.5" font-size="3">DRIVE</text>
+<text x="55.47" y="33.5" font-size="3">TONE</text>
+<text x="25.47" y="99.5" font-size="3">IN</text>
+<text x="55.47" y="99.5" font-size="3">OUT</text>
+</g>
+</svg>
