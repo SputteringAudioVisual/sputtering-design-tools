@@ -7,7 +7,7 @@ import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from panel_model import PanelDocument, Element, HEIGHT_MM, number, load_references, atomic_write
+from panel_model import PanelDocument, Element, HEIGHT_MM, HOLE_PRESETS, number, load_references, atomic_write
 
 
 class PanelWorkspace:
@@ -36,6 +36,7 @@ class PanelWorkspace:
         self.y = tk.StringVar(value='0')
         self.size = tk.StringVar(value='6.5')
         self.text = tk.StringVar(value='DRIVE')
+        self.hole_preset = tk.StringVar(value=HOLE_PRESETS['potentiometer'][0])
         self._build()
         self._apply_original_theme()
         self.protocol('WM_DELETE_WINDOW', self.close)
@@ -136,7 +137,7 @@ class PanelWorkspace:
         entry(settings, 'Tolerancia total (mm)', self.gap)
         ttk.Label(settings, textvariable=self.dimensions).pack(anchor='w', pady=4)
         ttk.Button(settings, text='Aplicar ancho y centrar PCB', command=self.apply_panel).pack(fill='x')
-        ttk.Button(settings, text='Añadir tornillos de rack Ø3,2', command=self.add_mounts).pack(fill='x', pady=(4, 0))
+        ttk.Button(settings, text='Actualizar tornillos de rack Ø3,2', command=self.add_mounts).pack(fill='x', pady=(4, 0))
         refs = section('2 · PCB de referencia · escala 1:1')
         self.layer_list = tk.Listbox(refs, height=4, exportselection=False, font=('Segoe UI', 9))
         self.layer_list.pack(fill='x')
@@ -156,6 +157,13 @@ class PanelWorkspace:
         for label, value in [('Seleccionar', 'select'), ('Agujero', 'hole'), ('Texto', 'text'), ('Mover PCB', 'pcb')]:
             ttk.Radiobutton(modes, text=label, variable=self.mode, value=value,
                             command=self.mode_changed).pack(anchor='w')
+        ttk.Label(controls, text='Tipo de agujero:').pack(anchor='w', pady=(6, 0))
+        self.hole_combo = ttk.Combobox(controls, textvariable=self.hole_preset, state='readonly',
+                                       values=[preset[0] for preset in HOLE_PRESETS.values()])
+        self.hole_combo.pack(fill='x', pady=(0, 3))
+        self.hole_combo.bind('<<ComboboxSelected>>', self.choose_hole_preset)
+        ttk.Label(controls, text='Medida inicial editable según el casquillo de la pieza.',
+                  wraplength=265, foreground='#7e8ba6').pack(anchor='w')
         entry(controls, 'Rejilla / ajuste (mm)', self.snap)
         entry(controls, 'X desde izquierda', self.x)
         entry(controls, 'Y desde abajo', self.y)
@@ -209,7 +217,7 @@ class PanelWorkspace:
             self.layer_list.insert('end', ('● ' if ref.visible else '○ ') + ref.name)
         self.object_list.delete(0, 'end')
         for i, obj in enumerate(d.elements):
-            name = f'Agujero Ø{obj.size:g}' if obj.kind == 'hole' else obj.text
+            name = f'{obj.text or "Agujero"} Ø{obj.size:g}' if obj.kind == 'hole' else obj.text
             self.object_list.insert('end', f'{i+1} · {name} · {obj.x:.1f}, {obj.y:.1f}')
         if self.selected is not None and self.selected < len(d.elements):
             self.object_list.selection_set(self.selected)
@@ -247,9 +255,14 @@ class PanelWorkspace:
     def apply_panel(self):
         try:
             checked = PanelDocument(hp=self.hp.get(), gap=self.gap.get())
+            candidate = copy.deepcopy(self.document)
+            candidate.hp, candidate.gap = checked.hp, checked.gap
+            candidate.center_pcb()
+            if any(e.is_rack_mount for e in candidate.elements):
+                candidate.mounting_holes()
             self.remember()
-            self.document.hp, self.document.gap = checked.hp, checked.gap
-            self.document.center_pcb()
+            self.document = candidate
+            self.selected = None
             self.changed()
             self.fit()
         except ValueError as error:
@@ -282,7 +295,9 @@ class PanelWorkspace:
             candidate.mounting_holes()
             self.remember()
             self.document = candidate
+            self.selected = None
             self.changed()
+            self.status.set('Tornillos de rack actualizados para el ancho actual. Agujeros de controles conservados.')
         except ValueError as error:
             messagebox.showerror('Tornillos de rack', str(error), parent=self)
 
@@ -290,17 +305,36 @@ class PanelWorkspace:
         self.selected = None
         if self.mode.get() == 'text':
             self.size.set('3')
+            if self.text.get() in {p[2] for p in HOLE_PRESETS.values()}:
+                self.text.set('DRIVE')
         elif self.mode.get() == 'hole':
-            self.size.set('6.5')
+            self._apply_hole_preset()
         self.status.set('Selecciona o arrastra un objeto.' if self.mode.get() == 'select' else
                         'Haz clic en el panel. Coordenadas en mm desde la esquina inferior izquierda.')
+
+    def _hole_type(self):
+        return next((key for key, value in HOLE_PRESETS.items() if value[0] == self.hole_preset.get()), 'custom')
+
+    def _apply_hole_preset(self):
+        _, diameter, name = HOLE_PRESETS[self._hole_type()]
+        if diameter is not None:
+            self.size.set(f'{diameter:g}')
+        self.text.set(name)
+
+    def choose_hole_preset(self, event=None):
+        # The palette prepares a new hole; it does not resize an existing object.
+        self.mode.set('hole')
+        self.mode_changed()
+        self.object_list.selection_clear(0, 'end')
+        self.status.set('Tipo preparado: haz clic en el panel o usa Añadir en X / Y. Diámetro editable.')
 
     def add_at(self, x, y):
         if self.mode.get() not in {'hole', 'text'}:
             self.status.set('Elige Agujero o Texto para añadir un objeto.')
             return
         try:
-            obj = Element(self.mode.get(), x, y, number(self.size.get(), 0.1, 200), self.text.get())
+            obj = Element(self.mode.get(), x, y, number(self.size.get(), 0.1, 200), self.text.get(),
+                          self._hole_type() if self.mode.get() == 'hole' else '')
             self.remember()
             self.document.elements.append(obj)
             self.selected = len(self.document.elements)-1
@@ -320,7 +354,7 @@ class PanelWorkspace:
         try:
             old = self.document.elements[self.selected]
             new = Element(old.kind, number(self.x.get()), number(self.y.get()),
-                          number(self.size.get(), 0.1, 200), self.text.get())
+                          number(self.size.get(), 0.1, 200), self.text.get(), old.hole_type)
             self.remember()
             self.document.elements[self.selected] = new
             self.changed()
@@ -340,6 +374,9 @@ class PanelWorkspace:
             self.y.set(f'{obj.y:.3f}')
             self.size.set(f'{obj.size:g}')
             self.text.set(obj.text)
+            if obj.kind == 'hole':
+                kind = 'rack' if obj.is_rack_mount else obj.hole_type or 'custom'
+                self.hole_preset.set(HOLE_PRESETS[kind][0])
         self.refresh()
 
     def delete(self):
