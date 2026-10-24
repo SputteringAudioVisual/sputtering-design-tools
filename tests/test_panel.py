@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -162,6 +163,102 @@ class GeometryTests(unittest.TestCase):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_drag_existing_objects_while_placement_tool_remains_active(self):
+        from panel_editor import PanelEditor
+        from types import SimpleNamespace
+        app=PanelEditor();app.geometry('1100x800');app.update();app.update();app.withdraw()
+        try:
+            app.snap.set('0')
+            app.document=PanelDocument(elements=[Element('hole',30,40,7,'GAIN','potentiometer'),
+                                                 Element('text',60,70,3,'DRIVE')])
+            app.zoom=1.8;app.pan=[42,-27]
+            self.assertGreater(app.transform()[0],1)
+            for tool,index in [('hole',0),('text',1)]:
+                with self.subTest(tool=tool):
+                    app.mode.set(tool);app.mode_changed();app.dirty=False
+                    app.history.clear();app.future.clear();app.draw()
+                    obj=app.document.elements[index];origin=(obj.x,obj.y)
+                    # Press away from the centre: dragging must preserve the
+                    # grab offset rather than snapping the object to the mouse.
+                    sx,sy=origin[0]+.4,origin[1]+.3
+                    event=lambda x,y:SimpleNamespace(x=app.to_canvas(x,y)[0],y=app.to_canvas(x,y)[1])
+                    app.press(event(sx,sy))
+                    self.assertEqual(app.selected,index)
+                    self.assertFalse(app.history)
+                    with patch.object(app,'draw',wraps=app.draw) as repaint:
+                        for dx,dy in [(2,3),(4,5),(8,9)]:
+                            app.motion(event(sx+dx,sy+dy))
+                        repaint.assert_not_called()
+                    app.release(event(sx+8,sy+9))
+                    self.assertEqual(len(app.document.elements),2)
+                    self.assertAlmostEqual(obj.x,origin[0]+8)
+                    self.assertAlmostEqual(obj.y,origin[1]+9)
+                    self.assertAlmostEqual(float(app.x.get()),obj.x)
+                    self.assertAlmostEqual(float(app.y.get()),obj.y)
+                    self.assertEqual(len(app.history),1)
+                    self.assertTrue(app.dirty)
+                    app.undo()
+                    self.assertEqual((app.document.elements[index].x,app.document.elements[index].y),origin)
+                    app.redo()
+                    self.assertAlmostEqual(app.document.elements[index].x,origin[0]+8)
+        finally:app.destroy()
+
+    def test_canvas_bindings_place_drag_and_click_without_creating_duplicates(self):
+        from panel_editor import PanelEditor
+        app=PanelEditor();app.geometry('1100x800');app.update();app.update()
+        try:
+            app.mode.set('hole');app.mode_changed();app.snap.set('0.5')
+            self.assertTrue(app.canvas.winfo_viewable())
+            def mouse(sequence,x,y):
+                px,py=app.to_canvas(x,y)
+                app.canvas.event_generate(sequence,x=round(px),y=round(py))
+                app.update_idletasks()
+            mouse('<ButtonPress-1>',25,30)
+            mouse('<ButtonRelease-1>',25,30)
+            obj=app.document.elements[0]
+            self.assertAlmostEqual(float(app.x.get()),obj.x)
+            self.assertAlmostEqual(float(app.y.get()),obj.y)
+            app.dirty=False;app.history.clear()
+            app.future=[PanelDocument()]
+            mouse('<ButtonPress-1>',obj.x,obj.y)
+            mouse('<ButtonRelease-1>',obj.x,obj.y)
+            self.assertEqual(len(app.document.elements),1)
+            self.assertFalse(app.history)
+            self.assertFalse(app.dirty)
+            self.assertEqual(len(app.future),1)
+            mouse('<ButtonPress-1>',obj.x,obj.y)
+            mouse('<B1-Motion>',40,45)
+            mouse('<ButtonRelease-1>',40,45)
+            self.assertEqual(len(app.document.elements),1)
+            self.assertAlmostEqual(obj.x,40,delta=.5)
+            self.assertAlmostEqual(obj.y,45,delta=.5)
+            app.mode.set('text');app.mode_changed()
+            mouse('<ButtonPress-1>',70,80)
+            mouse('<B1-Motion>',75,85)
+            mouse('<ButtonRelease-1>',75,85)
+            self.assertEqual(len(app.document.elements),2)
+            self.assertEqual(app.document.elements[-1].kind,'text')
+            app.undo()
+            self.assertEqual(len(app.document.elements),1)
+        finally:app.destroy()
+
+    def test_explicit_pcb_move_does_not_move_controls_and_is_undoable(self):
+        from panel_editor import PanelEditor
+        from types import SimpleNamespace
+        app=PanelEditor();app.geometry('1100x800');app.update();app.update();app.withdraw()
+        try:
+            app.document=PanelDocument(layers=[Reference('outline.gbr',BOARD)],
+                                       elements=[Element('hole',30,40,7,'GAIN','potentiometer')])
+            app.document.center_pcb();before=(app.document.pcb_dx,app.document.pcb_dy)
+            app.mode.set('pcb');app.mode_changed();app.snap.set('0')
+            event=lambda x,y:SimpleNamespace(x=app.to_canvas(x,y)[0],y=app.to_canvas(x,y)[1])
+            app.press(event(30,40));app.motion(event(35,46));app.release(event(35,46))
+            self.assertEqual((app.document.elements[0].x,app.document.elements[0].y),(30,40))
+            self.assertAlmostEqual(app.document.pcb_dx,before[0]+5)
+            app.undo()
+            self.assertEqual((app.document.pcb_dx,app.document.pcb_dy),before)
+        finally:app.destroy()
+
     def test_panel_resize_replaces_mounts_in_one_undo_step(self):
         from panel_editor import PanelEditor
         app=PanelEditor();app.withdraw()
