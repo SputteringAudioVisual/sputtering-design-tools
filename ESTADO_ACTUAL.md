@@ -6,7 +6,11 @@ Estado: versión comprobada en uso por Luis. Desarrollo cerrado por ahora; se re
 
 Se retoma únicamente el frontal a petición de Luis: se corrige la acumulación de tornillos al cambiar HP y se añaden plantillas de agujero para potenciómetro, jack, SPDT, rack y personalizado. El editor de serigrafías conserva su estado validado.
 
-El patrón de rack reemplaza los tornillos anteriores (incluidos los de proyectos antiguos) y se actualiza al aplicar otro ancho; no elimina agujeros de controles ni textos. Los preajustes preparan nuevas colocaciones, permiten editar el diámetro y conservan el tipo al guardar/reabrir. Las operaciones de edición y el cambio de patrón admiten deshacer/rehacer. Pasan las 52 pruebas locales, incluidas las 48 del cierre anterior.
+El patrón de rack reemplaza los tornillos anteriores (incluidos los de proyectos antiguos) y se actualiza al aplicar otro ancho; no elimina agujeros de controles ni textos. Los preajustes preparan nuevas colocaciones, permiten editar el diámetro y conservan el tipo al guardar/reabrir. Las operaciones de edición y el cambio de patrón admiten deshacer/rehacer.
+
+Se corrige también la prioridad de selección: pulsar un agujero o texto existente permite arrastrarlo, incluso con una herramienta de colocación activa, sin añadir otro objeto. Se conserva el punto de agarre con zoom y rejilla, se actualizan X/Y y el movimiento completo se deshace en un solo paso. Seleccionar sin mover no crea historial ni elimina la posibilidad de rehacer. Durante el arrastre de un objeto se mueve solo su dibujo, sin repintar las referencias Gerber en cada evento. La comprobación incluye eventos reales de ratón en la ventana de pruebas.
+
+Validación actualizada: pasan las 55 pruebas locales, incluidas las 48 del cierre anterior y las regresiones de tornillos, plantillas y arrastre.
 
 ## Punto de entrada y flujo conservado
 
