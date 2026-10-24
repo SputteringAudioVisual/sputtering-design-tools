@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from panel_model import PanelDocument, Reference, Element, geometry_bounds, load_references
+from panel_model import PanelDocument, Reference, Element, HOLE_PRESETS, geometry_bounds, load_references
 
 
 BOARD = '''G04 Synthetic reference board, not the distortion PCB*
@@ -94,6 +94,37 @@ class GeometryTests(unittest.TestCase):
         d.elements = [Element('hole', 10, 20, 6), Element('hole', 11, 20, 6)]
         self.assertEqual(len(d.problems()), 2)
 
+    def test_rack_replaces_legacy_patterns_and_keeps_control_holes_and_text(self):
+        d = PanelDocument(hp=28)
+        d.elements = [Element('hole',x,y,3.2,'Tornillo rack')
+                      for x in (7.5,134.5,124.34) for y in (3,125.5)]
+        controls = [Element('hole',7.5,3,3.2,'Custom M3','custom'),
+                    Element('hole',50,60,6,'Entrada','jack'),Element('text',65,120,3,'DISTORTION')]
+        d.elements += controls
+        d.hp = 26
+        d.mounting_holes()
+        mounts = [e for e in d.elements if e.is_rack_mount]
+        self.assertEqual(len(mounts),4)
+        self.assertEqual(sorted({e.x for e in mounts}),[7.5,124.34])
+        self.assertTrue(all(e in d.elements for e in controls))
+        before=d.to_dict()
+        d.mounting_holes()
+        self.assertEqual(before,d.to_dict())
+        d.hp=8; d.mounting_holes()
+        self.assertEqual(len([e for e in d.elements if e.is_rack_mount]),2)
+        self.assertTrue(all(e in d.elements for e in controls))
+
+    def test_typed_holes_roundtrip_and_export_actual_diameter(self):
+        d=PanelDocument(elements=[Element('hole',10+i*12,30,p[1],p[2],key)
+                                  for i,(key,p) in enumerate(HOLE_PRESETS.items()) if p[1] is not None])
+        restored=PanelDocument.from_dict(d.to_dict())
+        self.assertEqual(restored.to_dict(),d.to_dict())
+        circles=ET.fromstring(restored.svg()).findall('.//{http://www.w3.org/2000/svg}circle')
+        self.assertEqual([float(e.attrib['r'])*2 for e in circles],[7,6,6.5,3.2])
+        legacy=Element('hole',10,20,6.5,'Legacy')
+        self.assertEqual(legacy.hole_type,'')
+        with self.assertRaises(ValueError): Element('hole',10,20,6,'Jack','unsupported')
+
     def test_portable_project_roundtrip(self):
         d = PanelDocument(layers=[Reference('outline.gbr', BOARD)],
                           elements=[Element('text', 20, 30, 3, 'GAIN & <TONE>')])
@@ -131,6 +162,58 @@ class GeometryTests(unittest.TestCase):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_panel_resize_replaces_mounts_in_one_undo_step(self):
+        from panel_editor import PanelEditor
+        app=PanelEditor();app.withdraw()
+        try:
+            app.document=PanelDocument(hp=28,elements=[Element('hole',60,60,6,'IN','jack')])
+            app.document.mounting_holes();before=app.document.to_dict()
+            app.hp.set('26');app.apply_panel()
+            mounts=[e for e in app.document.elements if e.is_rack_mount]
+            self.assertEqual(len(mounts),4)
+            self.assertEqual(max(e.x for e in mounts),124.34)
+            app.add_mounts()
+            self.assertEqual(len([e for e in app.document.elements if e.is_rack_mount]),4)
+            app.undo();app.undo()
+            self.assertEqual(app.document.to_dict(),before)
+            app.redo()
+            self.assertEqual(app.document.hp,26)
+            self.assertEqual(len([e for e in app.document.elements if e.is_rack_mount]),4)
+        finally: app.destroy()
+
+    def test_preset_palette_prepares_new_holes_and_keeps_manual_edits(self):
+        from panel_editor import PanelEditor
+        app=PanelEditor();app.withdraw()
+        try:
+            self.assertEqual(str(app.hole_combo.cget('state')),'readonly')
+            for key in ('potentiometer','jack','spdt','rack'):
+                with self.subTest(kind=key):
+                    label,diameter,name=HOLE_PRESETS[key]
+                    app.hole_preset.set(label);app.choose_hole_preset()
+                    self.assertEqual(app.mode.get(),'hole')
+                    self.assertEqual(float(app.size.get()),diameter)
+                    app.add_at(20,30)
+                    obj=app.document.elements[-1]
+                    self.assertEqual((obj.size,obj.hole_type,obj.text),(diameter,key,name))
+            previous=app.document.to_dict()
+            app.select(1)
+            app.hole_preset.set(HOLE_PRESETS['potentiometer'][0]);app.choose_hole_preset()
+            self.assertIsNone(app.selected)
+            self.assertEqual(app.document.to_dict(),previous)
+            app.size.set('7,2');app.add_at(40,50)
+            app.select(len(app.document.elements)-1)
+            self.assertEqual(float(app.size.get()),7.2)
+            self.assertEqual(app.hole_preset.get(),HOLE_PRESETS['potentiometer'][0])
+            app.text.set('Drive');app.size.set('7,3');app.apply_selection()
+            self.assertEqual(app.document.elements[-1].hole_type,'potentiometer')
+            app.undo();self.assertEqual(app.document.elements[-1].size,7.2)
+            app.select(len(app.document.elements)-1)
+            app.hole_preset.set(HOLE_PRESETS['custom'][0]);app.choose_hole_preset()
+            self.assertEqual(float(app.size.get()),7.2)
+            app.mode.set('text');app.mode_changed();app.add_at(45,60)
+            self.assertEqual(app.document.elements[-1].hole_type,'')
+        finally: app.destroy()
+
     def test_edit_history_and_canvas_roundtrip(self):
         from panel_editor import PanelEditor
         app = PanelEditor()
