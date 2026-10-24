@@ -22,6 +22,7 @@ class PanelWorkspace:
         self.history, self.future = [], []
         self.selected = None
         self.drag = None
+        self._drag_recorded = False
         self.zoom = 1
         self.pan = [0, 0]
         self.mode = tk.StringVar(value='select')
@@ -44,7 +45,7 @@ class PanelWorkspace:
         self.bind('<Control-z>', lambda e: self.undo() if not self._editing() else None)
         self.bind('<Control-y>', lambda e: self.redo() if not self._editing() else None)
         self.bind('<Delete>', lambda e: self.delete() if not self._editing() else None)
-        self.bind('<Escape>', lambda e: self.mode.set('select'))
+        self.bind('<Escape>', lambda e: (self.mode.set('select'), self.mode_changed()))
         self.refresh()
         if paths:
             self.after(100, lambda: self.load_paths(paths))
@@ -171,7 +172,7 @@ class PanelWorkspace:
         entry(controls, 'Texto / nombre', self.text)
         ttk.Button(controls, text='Añadir en X / Y', command=self.add_numeric).pack(fill='x', pady=(5, 2))
         ttk.Button(controls, text='Aplicar al objeto seleccionado', command=self.apply_selection).pack(fill='x', pady=2)
-        ttk.Label(controls, text='O haz clic en el panel para colocar.\nArrastra para mover; rueda para zoom.\nBotón derecho: desplazar la vista.',
+        ttk.Label(controls, text='Clic vacío: colocar. Sobre un objeto: seleccionar y arrastrar, también en modo Agujero/Texto.\nEsc: seleccionar. Rueda: zoom.\nBotón derecho: desplazar la vista.',
                   wraplength=265, foreground='#586878').pack(anchor='w', pady=4)
         objects = section('4 · Objetos del frontal')
         self.object_list = tk.Listbox(objects, height=5, exportselection=False)
@@ -303,6 +304,7 @@ class PanelWorkspace:
 
     def mode_changed(self):
         self.selected = None
+        self.drag = None
         if self.mode.get() == 'text':
             self.size.set('3')
             if self.text.get() in {p[2] for p in HOLE_PRESETS.values()}:
@@ -310,7 +312,8 @@ class PanelWorkspace:
         elif self.mode.get() == 'hole':
             self._apply_hole_preset()
         self.status.set('Selecciona o arrastra un objeto.' if self.mode.get() == 'select' else
-                        'Haz clic en el panel. Coordenadas en mm desde la esquina inferior izquierda.')
+                        'Clic vacío: colocar. Sobre un objeto: arrastrar para mover.')
+        self.draw()
 
     def _hole_type(self):
         return next((key for key, value in HOLE_PRESETS.items() if value[0] == self.hole_preset.get()), 'custom')
@@ -337,8 +340,9 @@ class PanelWorkspace:
                           self._hole_type() if self.mode.get() == 'hole' else '')
             self.remember()
             self.document.elements.append(obj)
-            self.selected = len(self.document.elements)-1
-            self.changed()
+            self.dirty = True
+            self.select(len(self.document.elements)-1)
+            return self.selected
         except ValueError as error:
             messagebox.showerror('Objeto del panel', str(error), parent=self)
 
@@ -439,54 +443,79 @@ class PanelWorkspace:
 
     def coordinates(self, event):
         x, y = self.from_canvas(event.x, event.y)
-        self.status.set(f'X {x:.2f} mm  ·  Y {y:.2f} mm  |  Origen: esquina inferior izquierda  |  Escala PCB 1:1')
+        self.status.set(f'X {x:.2f} mm  ·  Y {y:.2f} mm  |  Arrastra objetos para moverlos  |  Escala PCB 1:1')
 
-    def press(self, event):
-        x, y = self.from_canvas(event.x, event.y)
-        mode = self.mode.get()
-        if mode in {'hole', 'text'}:
-            if 0 <= x <= self.document.width and 0 <= y <= HEIGHT_MM:
-                try:
-                    self.add_at(*self.snapped(x, y))
-                except ValueError as error:
-                    messagebox.showerror('Rejilla', str(error), parent=self)
-            return
-        if mode == 'pcb' and self.document.layers:
-            self.remember()
-            self.drag = ('pcb', x, y, self.document.pcb_dx, self.document.pcb_dy)
-            return
-        matches = self.canvas.find_overlapping(event.x-4, event.y-4, event.x+4, event.y+4)
-        index = None
+    def object_at(self, px, py):
+        matches = self.canvas.find_overlapping(px-4, py-4, px+4, py+4)
         for item in reversed(matches):
             for tag in self.canvas.gettags(item):
                 if tag.startswith('obj_'):
-                    index = int(tag[4:])
-                    break
-            if index is not None:
-                break
-        self.select(index)
+                    return int(tag[4:])
+        return None
+
+    def press(self, event):
+        self.canvas.focus_set()
+        self.drag = None
+        self._drag_recorded = False
+        x, y = self.from_canvas(event.x, event.y)
+        mode = self.mode.get()
+        if mode == 'pcb' and self.document.layers:
+            self.drag = ('pcb', x, y, self.document.pcb_dx, self.document.pcb_dy)
+            return
+        # Existing objects take priority over every placement tool.
+        index = self.object_at(event.x, event.y)
         if index is not None:
+            self.select(index)
             obj = self.document.elements[index]
-            self.remember()
             self.drag = (index, x, y, obj.x, obj.y)
+            return
+        if mode in {'hole', 'text'}:
+            if 0 <= x <= self.document.width and 0 <= y <= HEIGHT_MM:
+                try:
+                    added = self.add_at(*self.snapped(x, y))
+                    if added is not None:
+                        obj = self.document.elements[added]
+                        self.drag = (added, x, y, obj.x, obj.y)
+                        # Placing and dragging in one gesture is one undo action.
+                        self._drag_recorded = True
+                except ValueError as error:
+                    messagebox.showerror('Rejilla', str(error), parent=self)
+            return
+        self.select(None)
 
     def motion(self, event):
         if self.drag:
             key, sx, sy, ox, oy = self.drag
             x, y = self.from_canvas(event.x, event.y)
+            if not self._drag_recorded and math.hypot(x-sx, y-sy)*self.transform()[0] < 3:
+                return
             try:
                 nx, ny = self.snapped(ox+x-sx, oy+y-sy)
             except ValueError:
                 return
             if key == 'pcb':
+                if (nx, ny) == (self.document.pcb_dx, self.document.pcb_dy):
+                    return
+                if not self._drag_recorded:
+                    self.remember()
+                    self._drag_recorded = True
                 self.document.pcb_dx, self.document.pcb_dy = nx, ny
+                self.draw()
             else:
                 obj = self.document.elements[key]
+                if (nx, ny) == (obj.x, obj.y):
+                    return
+                if not self._drag_recorded:
+                    self.remember()
+                    self._drag_recorded = True
+                scale = self.transform()[0]
+                # Move only the selected drawing; do not repaint thousands of
+                # Gerber reference primitives on every mouse movement.
+                self.canvas.move(f'obj_{key}', (nx-obj.x)*scale, -(ny-obj.y)*scale)
                 obj.x, obj.y = nx, ny
                 self.x.set(f'{nx:.3f}')
                 self.y.set(f'{ny:.3f}')
             self.dirty = True
-            self.draw()
 
     def release(self, event):
         if self.drag:
