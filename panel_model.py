@@ -14,6 +14,14 @@ from drill import DrillLayer, parameter_format
 HEIGHT_MM = 128.5
 HP_MM = 5.08
 SCHEMA = "sputtering.front-panel.v1"
+# Starting templates, not a claim that every part in a family has this bushing.
+HOLE_PRESETS = {
+    'potentiometer': ('Potenciómetro · Ø7 mm', 7.0, 'Potenciómetro'),
+    'jack': ('Jack 3,5 mm · Ø6 mm', 6.0, 'Jack'),
+    'spdt': ('SPDT mini · Ø6,5 mm', 6.5, 'SPDT'),
+    'rack': ('Tornillo de rack · Ø3,2 mm', 3.2, 'Tornillo rack'),
+    'custom': ('Personalizado', None, 'Agujero'),
+}
 GERBER_EXTENSIONS = {'.gbr', '.ger', '.art', '.gto', '.gbo', '.gko', '.gm1',
                      '.gtl', '.gbl', '.gts', '.gbs', '.pho'}
 DRILL_EXTENSIONS = {'.drl', '.xln', '.exc'}
@@ -181,6 +189,7 @@ class Element:
     y: float
     size: float
     text: str = ''
+    hole_type: str = ''
 
     def __post_init__(self):
         if self.kind not in {'hole', 'text'}:
@@ -188,8 +197,18 @@ class Element:
         self.x, self.y = number(self.x), number(self.y)
         self.size = number(self.size, 0.1, 200)
         self.text = str(self.text)
+        if self.hole_type not in ('', *HOLE_PRESETS):
+            raise ValueError('Tipo de agujero no reconocido.')
+        if self.kind != 'hole' and self.hole_type:
+            raise ValueError('Solo los agujeros pueden tener un tipo de montaje.')
         if self.kind == 'text' and not self.text.strip():
             raise ValueError("Escribe un texto.")
+
+    @property
+    def is_rack_mount(self):
+        # The original projects identified generated mounts only by this name.
+        return self.kind == 'hole' and (self.hole_type == 'rack' or
+               (not self.hole_type and self.text.strip().casefold() == 'tornillo rack'))
 
 
 @dataclass
@@ -239,10 +258,10 @@ class PanelDocument:
         if self.hp < 4:
             raise ValueError("Para el patrón de tornillos de esta versión elige al menos 4 HP.")
         xs = [7.5] if self.hp < 10 else [7.5, 7.5 + (self.hp - 3) * HP_MM]
-        candidates = [Element('hole', x, y, 3.2, 'Tornillo rack') for x in xs for y in (3, HEIGHT_MM-3)]
-        for item in candidates:
-            if not any(e.kind == 'hole' and math.hypot(e.x-item.x, e.y-item.y) < 0.01 for e in self.elements):
-                self.elements.append(item)
+        candidates = [Element('hole', x, y, 3.2, 'Tornillo rack', 'rack') for x in xs for y in (3, HEIGHT_MM-3)]
+        # Replace the entire generated pattern, including old-width duplicates.
+        # Unrelated holes are never removed merely because they share coordinates.
+        self.elements = [e for e in self.elements if not e.is_rack_mount]+candidates
 
     def problems(self):
         issues = []
