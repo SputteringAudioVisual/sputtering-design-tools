@@ -2,6 +2,12 @@
 
 Estado: versión comprobada en uso por Luis. Desarrollo cerrado por ahora; se retomará cuando aparezca un fallo concreto. No se inicia una nueva ronda de rediseño ni de funciones.
 
+## Actualización del frontal — 24 de octubre de 2026
+
+Se retoma únicamente el frontal a petición de Luis: se corrige la acumulación de tornillos al cambiar HP y se añaden plantillas de agujero para potenciómetro, jack, SPDT, rack y personalizado. El editor de serigrafías conserva su estado validado.
+
+El patrón de rack reemplaza los tornillos anteriores (incluidos los de proyectos antiguos) y se actualiza al aplicar otro ancho; no elimina agujeros de controles ni textos. Los preajustes preparan nuevas colocaciones, permiten editar el diámetro y conservan el tipo al guardar/reabrir. Las operaciones de edición y el cambio de patrón admiten deshacer/rehacer. Pasan las 52 pruebas locales, incluidas las 48 del cierre anterior.
+
 ## Punto de entrada y flujo conservado
 
 `Sputtering Design Tools.pyw` y `sputtering_design_tools.py` abren el editor de PCB y serigrafías. El frontal Eurorack es una ventana adicional del mismo proyecto; `--panel` permite abrirla directamente. Los accesos directos existentes siguen apuntando a la misma aplicación.
