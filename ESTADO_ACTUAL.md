@@ -2,6 +2,10 @@
 
 Estado: versión comprobada en uso por Luis. Desarrollo cerrado por ahora; se retomará cuando aparezca un fallo concreto. No se inicia una nueva ronda de rediseño ni de funciones.
 
+## Medidas iniciales de agujeros — 25 de octubre de 2026
+
+Se actualizan las plantillas manuales y la biblioteca de footprints a Ø8,128 mm para potenciómetro y Ø6,1 mm para jack, conservando Ø3,2 mm para rack. Los diámetros se contrastan con dos archivos Excellon de un frontal existente; no se publica su geometría. Se mantiene Ø6,5 mm para SPDT porque esa referencia no permite comprobarlo. La exportación conserva los diámetros exactos. Los proyectos guardados mantienen sus medidas y personalizaciones.
+
 ## Automatización del frontal — 25 de octubre de 2026
 
 Se añade **Importar textos desde .brd…** como opción independiente: propone etiquetas refdes únicamente para componentes reconocidos con agujero, con altura, separación y posición encima/debajo ajustables. La previsualización no modifica el documento; al aplicar se crean textos editables, vinculados a la posición de PCB y exportables en SVG. La repetición conserva textos generados o manuales ya existentes. Generar de nuevo los agujeros no borra sus etiquetas. **Vaciar agujeros y textos** permite reiniciar el diseño conservando la PCB y admite deshacer. La escritura atómica también elimina su temporal si falla la escritura.
