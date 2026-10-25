@@ -4,6 +4,10 @@ Estado: versión comprobada en uso por Luis. Desarrollo cerrado por ahora; se re
 
 ## Automatización del frontal — 25 de octubre de 2026
 
+Se añade **Importar textos desde .brd…** como opción independiente: propone etiquetas refdes únicamente para componentes reconocidos con agujero, con altura, separación y posición encima/debajo ajustables. La previsualización no modifica el documento; al aplicar se crean textos editables, vinculados a la posición de PCB y exportables en SVG. La repetición conserva textos generados o manuales ya existentes. Generar de nuevo los agujeros no borra sus etiquetas. **Vaciar agujeros y textos** permite reiniciar el diseño conservando la PCB y admite deshacer. La escritura atómica también elimina su temporal si falla la escritura.
+
+Pasan **75 pruebas locales**, incluidas siete nuevas regresiones de etiquetas: anclaje mecánico, agujero recolocado/diámetro editado, no duplicación, conservación de textos editados, guardado/reapertura, seguimiento de PCB, importación inválida atómica, previsualización/cancelación, deshacer/rehacer y arrastre.
+
 Nueva opción **Agujeros desde footprints…**, con lectura de Allegro guardado mediante Extracta o una referencia JSON portátil. Se conserva el flujo de serigrafía. La biblioteca relaciona cada footprint con su tipo, diámetro, cara y anclaje mecánico. Admite editar esas reglas y exportarlas/importarlas para otros módulos.
 
 La revisión muestra las propuestas antes de aplicar y dibuja círculos violetas sin modificar el proyecto. Los objetos manuales se conservan; las coincidencias y solapes manuales no se convierten en agujeros duplicados. Las actualizaciones de agujeros generados son idempotentes, admiten deshacer y guardan su referencia/posición relativa para seguir a la PCB al moverla o centrarla. Se mantiene su edición manual y la exportación SVG.
