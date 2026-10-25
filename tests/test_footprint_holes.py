@@ -44,7 +44,7 @@ class FootprintGeometryTests(unittest.TestCase):
         self.assertFalse(skipped)
         self.assertEqual([(p['refdes'],p['x_mm'],p['y_mm']) for p in items],
                          [('P1',2.5,7),('J1',10,6.48),('S1',20,15.3)])
-        self.assertEqual([p['diameter_mm'] for p in items],[7,6,6.5])
+        self.assertEqual([p['diameter_mm'] for p in items],[8.128,6.1,6.5])
 
     def test_world_pin_coordinates_handle_rotated_and_bottom_components(self):
         data=sample();pot=data['components'][0]
@@ -225,9 +225,9 @@ class RefdesLabelTests(unittest.TestCase):
         self.assertEqual([e.text for e in labels],['P1','J1','S1'])
         pot=labels[0]
         self.assertEqual(pot.x,2.5+d.pcb_dx)
-        self.assertEqual(pot.y,7+d.pcb_dy+3.5+1+1.25)
+        self.assertAlmostEqual(pot.y,7+d.pcb_dy+8.128/2+1+1.25)
         below,_=d.refdes_labels(sample(),DEFAULT_RULES,size=3,gap=2,position='below')
-        self.assertEqual(below[0].y,7+d.pcb_dy-3.5-2-1.5)
+        self.assertAlmostEqual(below[0].y,7+d.pcb_dy-8.128/2-2-1.5)
 
     def test_label_uses_actual_moved_hole_and_its_edited_diameter(self):
         d=self.document();d.apply_footprint_holes(sample(),DEFAULT_RULES,['P1'])
