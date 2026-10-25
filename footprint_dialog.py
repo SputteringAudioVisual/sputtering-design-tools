@@ -18,10 +18,11 @@ ANCHOR_LABELS = {'mechanical_pair': 'Centro entre 2 anclajes mecánicos',
 
 
 class FootprintDialog(tk.Toplevel):
-    def __init__(self, owner):
+    def __init__(self, owner, mode='holes'):
         super().__init__(owner)
         self.owner = owner
-        self.title('Agujeros desde footprints de la PCB')
+        self.mode = mode
+        self.title('Importar textos desde .brd' if mode == 'texts' else 'Agujeros desde footprints de la PCB')
         self.geometry('1100x720')
         self.minsize(950,620)
         self.configure(bg='#252535')
@@ -34,18 +35,30 @@ class FootprintDialog(tk.Toplevel):
         self.status = tk.StringVar(value='Carga una PCB .brd guardada o una referencia de componentes JSON.')
         self.footprint, self.kind = tk.StringVar(), tk.StringVar()
         self.diameter, self.anchor, self.value, self.side = [tk.StringVar() for _ in range(4)]
+        self.text_size = tk.StringVar(value='2.5')
+        self.text_gap = tk.StringVar(value='1.0')
+        self.text_position = tk.StringVar(value='Encima')
         top=ttk.Frame(self,padding=10);top.pack(fill='x')
         self.read_button=ttk.Button(top,text='Leer PCB / referencia…',command=self.choose_source)
         self.read_button.pack(side='left')
         ttk.Label(top,textvariable=self.status,wraplength=810).pack(side='left',padx=10)
-        ttk.Label(self,text='Revisa los centros y diámetros. Doble clic o Espacio marca/desmarca. Los círculos violetas son una previsualización.',
+        ttk.Label(self,text=('Importa el refdes de los componentes con agujero como texto editable. Las etiquetas existentes se conservan.' if mode == 'texts' else
+                  'Revisa los centros y diámetros. Doble clic o Espacio marca/desmarca. Los círculos violetas son una previsualización.'),
                   wraplength=1050).pack(anchor='w',padx=12,pady=5)
+        if mode == 'texts':
+            options=ttk.Frame(self,padding=(10,5));options.pack(fill='x')
+            for label,var in [('Altura de texto (mm)',self.text_size),('Separación del borde del agujero (mm)',self.text_gap)]:
+                ttk.Label(options,text=label).pack(side='left',padx=4)
+                ttk.Entry(options,textvariable=var,width=7).pack(side='left',padx=4)
+            ttk.Combobox(options,textvariable=self.text_position,state='readonly',values=['Encima','Debajo'],width=9).pack(side='left',padx=4)
+            ttk.Button(options,text='Actualizar previsualización',command=self.refresh).pack(side='left',padx=4)
         frame=ttk.Frame(self,padding=(10,0));frame.pack(fill='both',expand=True)
         columns=('use','ref','footprint','kind','x','y','diameter','action')
         self.table=ttk.Treeview(frame,columns=columns,show='headings',height=14,selectmode='browse')
         for key,label,width in zip(columns,['Usar','Componente','Footprint','Tipo','X panel','Y panel','Ø mm','Acción'],
                                    [45,85,180,115,80,80,65,230]):
             self.table.heading(key,text=label);self.table.column(key,width=width,minwidth=40)
+        if mode == 'texts':self.table.heading('diameter',text='Altura mm')
         scroll=ttk.Scrollbar(frame,orient='vertical',command=self.table.yview)
         self.table.configure(yscrollcommand=scroll.set)
         scroll.pack(side='right',fill='y');self.table.pack(fill='both',expand=True)
@@ -71,6 +84,7 @@ class FootprintDialog(tk.Toplevel):
                   wraplength=1000).grid(row=2,column=0,columnspan=6,sticky='w')
         ttk.Button(rule,text='Importar biblioteca de reglas…',command=self.import_rules).grid(row=3,column=0,columnspan=2,sticky='w',pady=5)
         ttk.Button(rule,text='Exportar biblioteca de reglas…',command=self.export_rules).grid(row=3,column=4,columnspan=2,sticky='e',pady=5)
+        if mode == 'texts':rule.pack_forget()
         bottom=ttk.Frame(self,padding=10);bottom.pack(fill='x')
         ttk.Button(bottom,text='Marcar todos válidos',command=lambda:self.mark_all(True)).pack(side='left',padx=3)
         ttk.Button(bottom,text='Desmarcar todos',command=lambda:self.mark_all(False)).pack(side='left',padx=3)
@@ -129,13 +143,19 @@ class FootprintDialog(tk.Toplevel):
         try:
             drills=[(p['x'],p['y']) for r in self.owner.document.layers if r.coord_format for p in r.layer.drawables]
             candidates,skipped=proposals(self.data,self.rules,self.owner.document.reference_bounds(),drills)
+            labels = {}
+            if self.mode == 'texts':
+                labels = {e.source_ref:e for e in self.owner.document.refdes_labels(self.data,self.rules,**self.text_options())[0]}
         except ValueError as error:
             self.status.set(str(error));self.apply_button.configure(state='disabled');return
         d=self.owner.document
-        owned={e.source_ref for e in d.elements if e.source_ref}
+        owned={e.source_ref for e in d.elements if e.kind=='hole' and e.source_ref}
         for item in candidates:
             x,y=item['x_mm']+d.pcb_dx,item['y_mm']+d.pcb_dy;r=item['diameter_mm']/2
             outside=not(r<=x<=d.width-r and r<=y<=HEIGHT_MM-r)
+            if self.mode == 'texts':
+                self.add_text_row(item,labels[item['refdes']])
+                continue
             manual=any(e.kind=='hole' and not e.source_ref and math.hypot(e.x-x,e.y-y)<.05 for e in d.elements)
             overlap=any(e.kind=='hole' and not e.source_ref and math.hypot(e.x-x,e.y-y)<(e.size+item['diameter_mm'])/2
                         for e in d.elements)
@@ -154,6 +174,24 @@ class FootprintDialog(tk.Toplevel):
             f"{len(self.checked)} seleccionados válidos. "
             + (' '.join(ref+': '+reason for ref,reason in skipped[:2])))
         self.update_checks()
+
+    def text_options(self):
+        from panel_model import number
+        return dict(size=number(self.text_size.get(),.5,20),gap=number(self.text_gap.get(),0,50),
+                    position='above' if self.text_position.get()=='Encima' else 'below')
+
+    def add_text_row(self,item,label):
+        d=self.owner.document
+        half_width=len(label.text)*label.size*.4
+        outside=not(half_width<=label.x<=d.width-half_width and label.size/2<=label.y<=HEIGHT_MM-label.size/2)
+        exists=any(e.kind=='text' and (e.source_ref==label.source_ref or
+                   (not e.source_ref and e.text.strip().casefold()==label.text.casefold())) for e in d.elements)
+        valid=not outside and not exists
+        ref=item['refdes']
+        self.items[ref]=(dict(item,label=label),valid,'Texto existente: conservar' if exists else 'Fuera del frontal' if outside else 'Añadir texto')
+        if valid:self.checked.add(ref)
+        self.table.insert('','end',iid=ref,values=('✓' if valid else '',ref,item['footprint'],'Etiqueta refdes',
+            f'{label.x:.3f}',f'{label.y:.3f}',f'{label.size:g}',self.items[ref][2]))
 
     def load_rule(self,event=None):
         rule=self.rules.get(self.footprint.get(),dict(hole_type='custom',diameter_mm=6.5,anchor='origin',value='',side='TOP'))
@@ -213,7 +251,13 @@ class FootprintDialog(tk.Toplevel):
         self.owner.canvas.delete('footprint_preview')
         d=self.owner.document;scale=self.owner.transform()[0]
         for ref in self.checked:
-            p=self.items[ref][0];x,y=self.owner.to_canvas(p['x_mm']+d.pcb_dx,p['y_mm']+d.pcb_dy)
+            p=self.items[ref][0]
+            if self.mode == 'texts':
+                label=p['label'];x,y=self.owner.to_canvas(label.x,label.y)
+                self.owner.canvas.create_text(x,y,text=label.text,fill='#b050e0',
+                    font=('Arial',-max(1,round(label.size*scale))),tags='footprint_preview')
+                continue
+            x,y=self.owner.to_canvas(p['x_mm']+d.pcb_dx,p['y_mm']+d.pcb_dy)
             r=p['diameter_mm']*scale/2
             self.owner.canvas.create_oval(x-r,y-r,x+r,y+r,outline='#b050e0',width=2,dash=(4,3),tags='footprint_preview')
 
@@ -221,10 +265,13 @@ class FootprintDialog(tk.Toplevel):
         if self.busy or not self.checked:return
         try:
             candidate=copy.deepcopy(self.owner.document)
-            count,collisions,_=candidate.apply_footprint_holes(self.data,self.rules,self.checked)
+            if self.mode == 'texts':
+                count,collisions,_=candidate.apply_refdes_labels(self.data,self.rules,self.checked,**self.text_options())
+            else:
+                count,collisions,_=candidate.apply_footprint_holes(self.data,self.rules,self.checked)
             self.owner.remember();self.owner.document=candidate;self.owner.selected=None;self.owner.changed()
-            self.owner.status.set(f'{count} agujeros desde footprints añadidos/actualizados. '
-                                  f'{len(collisions)} coincidencias manuales conservadas. Guarda el proyecto para conservar la referencia.')
+            self.owner.status.set(f'{count} '+('etiquetas refdes importadas. ' if self.mode == 'texts' else 'agujeros desde footprints añadidos/actualizados. ')
+                                  + f'{len(collisions)} coincidencias existentes conservadas. Guarda el proyecto para conservar la referencia.')
             self.close()
         except ValueError as error:messagebox.showerror('Agujeros desde PCB',str(error),parent=self)
 
