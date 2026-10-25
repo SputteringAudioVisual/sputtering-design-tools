@@ -4,7 +4,7 @@ Herramientas de diseño de Sputtering Audio Visual, centradas inicialmente en PC
 
 ## Estado actual
 
-El flujo de serigrafía conserva su validación del **23 de octubre de 2026**. El frontal sigue evolucionando y el **25 de octubre** incorpora agujeros automáticos desde footprints. Pasan **68 pruebas locales**. Historial y comprobaciones en [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md).
+El flujo de serigrafía conserva su validación del **23 de octubre de 2026**. El frontal sigue evolucionando y el **25 de octubre** incorpora agujeros automáticos desde footprints. Pasan **75 pruebas locales**. Historial y comprobaciones en [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md).
 
 La pantalla principal conserva el editor Gerber y su flujo de serigrafía: capas, imágenes PNG/JPG/SVG, conversión, posición/escala/giro, alineación, recetas y selección de destinos. Los drills Excellon se muestran como referencia. Blanco representa tinta sobre PCB negra y la conversión aplicada se comparte entre la vista y la exportación.
 
@@ -13,6 +13,8 @@ La imagen se recorta automáticamente al contorno de la PCB **tal como esté col
 El frontal Eurorack 3U es una ventana adicional de la misma aplicación: ancho en HP, PCB a escala real, agujeros, textos, proyectos portátiles y SVG 1:1.
 
 **Agujeros desde footprints…** lee una PCB Allegro guardada y reconoce potenciómetros, jacks y SPDT mediante una biblioteca de reglas reutilizable. Muestra los centros y diámetros antes de aplicarlos, conserva los objetos manuales y actualiza sus propios agujeros sin duplicarlos. Los agujeros generados siguen a la PCB al moverla o centrarla y también pueden editarse a mano. La biblioteca y las referencias de componentes se guardan con el proyecto; las reglas pueden importarse/exportarse para otros módulos.
+
+**Importar textos desde .brd…** añade etiquetas refdes editables para los componentes con agujero. Incluye previsualización, altura y separación ajustables, posición encima/debajo y conservación de etiquetas existentes. Los textos siguen a la PCB y admiten deshacer.
 
 Guía de uso, recorte, conversión y exportación: [FRONTAL_3U.md](FRONTAL_3U.md).
 
