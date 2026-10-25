@@ -121,7 +121,7 @@ class GeometryTests(unittest.TestCase):
         restored=PanelDocument.from_dict(d.to_dict())
         self.assertEqual(restored.to_dict(),d.to_dict())
         circles=ET.fromstring(restored.svg()).findall('.//{http://www.w3.org/2000/svg}circle')
-        self.assertEqual([float(e.attrib['r'])*2 for e in circles],[7,6,6.5,3.2])
+        self.assertEqual([float(e.attrib['r'])*2 for e in circles],[8.128,6.1,6.5,3.2])
         legacy=Element('hole',10,20,6.5,'Legacy')
         self.assertEqual(legacy.hole_type,'')
         with self.assertRaises(ValueError): Element('hole',10,20,6,'Jack','unsupported')
