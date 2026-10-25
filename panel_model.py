@@ -16,8 +16,8 @@ HP_MM = 5.08
 SCHEMA = "sputtering.front-panel.v1"
 # Starting templates, not a claim that every part in a family has this bushing.
 HOLE_PRESETS = {
-    'potentiometer': ('Potenciómetro · Ø7 mm', 7.0, 'Potenciómetro'),
-    'jack': ('Jack 3,5 mm · Ø6 mm', 6.0, 'Jack'),
+    'potentiometer': ('Potenciómetro · Ø8,128 mm', 8.128, 'Potenciómetro'),
+    'jack': ('Jack 3,5 mm · Ø6,1 mm', 6.1, 'Jack'),
     'spdt': ('SPDT mini · Ø6,5 mm', 6.5, 'SPDT'),
     'rack': ('Tornillo de rack · Ø3,2 mm', 3.2, 'Tornillo rack'),
     'custom': ('Personalizado', None, 'Agujero'),
