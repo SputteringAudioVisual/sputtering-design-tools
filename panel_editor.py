@@ -1,5 +1,6 @@
 """Desktop front-panel workspace. Coordinates are millimetres from bottom left."""
 import copy
+from dataclasses import replace
 import math
 from pathlib import Path
 import subprocess
@@ -23,6 +24,7 @@ class PanelWorkspace:
         self.selected = None
         self.drag = None
         self._drag_recorded = False
+        self.footprint_dialog = None
         self.zoom = 1
         self.pan = [0, 0]
         self.mode = tk.StringVar(value='select')
@@ -44,6 +46,7 @@ class PanelWorkspace:
         self.bind('<Control-s>', lambda e: self.save())
         self.bind('<Control-z>', lambda e: self.undo() if not self._editing() else None)
         self.bind('<Control-y>', lambda e: self.redo() if not self._editing() else None)
+        self.bind('<Control-Shift-H>', lambda e: self.footprint_holes())
         self.bind('<Delete>', lambda e: self.delete() if not self._editing() else None)
         self.bind('<Escape>', lambda e: (self.mode.set('select'), self.mode_changed()))
         self.refresh()
@@ -150,6 +153,7 @@ class PanelWorkspace:
         self.ref_combo.bind('<<ComboboxSelected>>', self.change_reference)
         ttk.Checkbutton(refs, text='Mostrar PCB detrás del frontal', variable=self.show_pcb, command=self.draw).pack(anchor='w')
         ttk.Button(refs, text='Centrar PCB sin cambiar su tamaño', command=self.center).pack(fill='x', pady=3)
+        ttk.Button(refs, text='Agujeros desde footprints…', command=self.footprint_holes).pack(fill='x', pady=3)
         self.pcb_info = ttk.Label(refs, wraplength=265, foreground='#586878')
         self.pcb_info.pack(fill='x')
         controls = section('3 · Colocar y editar')
@@ -219,6 +223,8 @@ class PanelWorkspace:
         self.object_list.delete(0, 'end')
         for i, obj in enumerate(d.elements):
             name = f'{obj.text or "Agujero"} Ø{obj.size:g}' if obj.kind == 'hole' else obj.text
+            if obj.source_ref:
+                name += ' · PCB'
             self.object_list.insert('end', f'{i+1} · {name} · {obj.x:.1f}, {obj.y:.1f}')
         if self.selected is not None and self.selected < len(d.elements):
             self.object_list.selection_set(self.selected)
@@ -238,11 +244,19 @@ class PanelWorkspace:
         if paths:
             self.load_paths(paths)
 
+    def footprint_holes(self):
+        from footprint_dialog import FootprintDialog
+        if self.footprint_dialog is not None and self.footprint_dialog.winfo_exists():
+            self.footprint_dialog.lift()
+        else:
+            self.footprint_dialog = FootprintDialog(self)
+
     def load_paths(self, paths):
         refs, errors = load_references(paths)
         if refs:
             self.remember()
             self.document.layers = refs
+            self.document.detach_footprint_holes()
             detected = self.document.choose_outline()
             self.document.center_pcb()
             self.show_pcb.set(True)
@@ -357,8 +371,10 @@ class PanelWorkspace:
             return
         try:
             old = self.document.elements[self.selected]
-            new = Element(old.kind, number(self.x.get()), number(self.y.get()),
-                          number(self.size.get(), 0.1, 200), self.text.get(), old.hole_type)
+            new = replace(old, x=number(self.x.get()), y=number(self.y.get()),
+                          size=number(self.size.get(), 0.1, 200), text=self.text.get())
+            if new.source_ref:
+                new.board_x, new.board_y = new.x-self.document.pcb_dx, new.y-self.document.pcb_dy
             self.remember()
             self.document.elements[self.selected] = new
             self.changed()
@@ -500,6 +516,7 @@ class PanelWorkspace:
                     self.remember()
                     self._drag_recorded = True
                 self.document.pcb_dx, self.document.pcb_dy = nx, ny
+                self.document.sync_footprint_holes()
                 self.draw()
             else:
                 obj = self.document.elements[key]
@@ -513,6 +530,8 @@ class PanelWorkspace:
                 # Gerber reference primitives on every mouse movement.
                 self.canvas.move(f'obj_{key}', (nx-obj.x)*scale, -(ny-obj.y)*scale)
                 obj.x, obj.y = nx, ny
+                if obj.source_ref:
+                    obj.board_x, obj.board_y = nx-self.document.pcb_dx, ny-self.document.pcb_dy
                 self.x.set(f'{nx:.3f}')
                 self.y.set(f'{ny:.3f}')
             self.dirty = True
