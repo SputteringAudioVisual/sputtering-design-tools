@@ -2,7 +2,7 @@
 
 Herramientas de diseño para Eurorack. Incluye el editor Gerber original y un espacio de trabajo para crear frontales 3U sobre una PCB de referencia.
 
-Versión comprobada en uso el 23 de octubre de 2026, con 48 pruebas locales superadas. El desarrollo queda cerrado por ahora y se retomará ante un fallo concreto. Véase [estado actual y cómo retomar](ESTADO_ACTUAL.md).
+El flujo de serigrafía se conserva tras su validación del 23 de octubre de 2026. El frontal incorpora selección y arrastre, plantillas de agujeros y colocación desde footprints. Véase [estado actual y cómo retomar](ESTADO_ACTUAL.md).
 
 ## Pantalla principal: la serigrafía original
 
@@ -26,7 +26,7 @@ Las vistas comparten preparación y máscara con el conversor Gerber. La origina
 
 **Exportar Gerber** mantiene el diálogo de capas y recetas. Las casillas tienen una marca de alto contraste y la selección, modo y holgura se conservan al volver a abrir el diálogo durante la sesión. Las capas sin marcar conservan su contenido original en el paquete.
 
-Si se ha cargado un ZIP o un proyecto con origen de fabricación registrado, se genera automáticamente una carpeta y un ZIP nuevos junto al ZIP de origen: por ejemplo, `WAVEDISTEQ_3_testrouted_fab_v003_edit_v001.zip`. Las siguientes exportaciones usan el siguiente número libre. Si se cargaron archivos sueltos, se pide la carpeta de destino.
+Si se ha cargado un ZIP o un proyecto con origen de fabricación registrado, se genera automáticamente una carpeta y un ZIP nuevos junto al ZIP de origen: por ejemplo, `mi_pcb_fab_v001_edit_v001.zip`. Las siguientes exportaciones usan el siguiente número libre. Si se cargaron archivos sueltos, se pide la carpeta de destino.
 
 El paquete conserva los archivos originales no editados, incluidos taladros, parámetros e informes. Incluye las capas modificadas y un manifiesto nuevo con sumas SHA-256 y ajustes de conversión. El manifiesto anterior se conserva en `historial_editor/`. Los informes de Allegro corresponden al origen; las modificaciones necesitan su revisión CAM. La aplicación verifica el ZIP antes de dar la exportación por terminada y no sobrescribe el paquete original ni exportaciones anteriores.
 
@@ -52,13 +52,35 @@ python sputtering_design_tools.py --demo
 
 Para recolocar objetos, pulsa y arrastra directamente un agujero o texto existente: tienen prioridad aunque esté activa la herramienta **Agujero** o **Texto**, por lo que no se crean duplicados al intentar moverlos. En una zona vacía, la herramienta de colocación sigue añadiendo objetos. **Esc** pasa a selección. Puedes agarrar un objeto desde cualquier punto de su dibujo, sin que salte al centro del cursor; se respeta la rejilla, el zoom y el desplazamiento de la vista. Los campos X/Y se sincronizan al colocar, seleccionar y mover. Un arrastre completo ocupa un único paso de deshacer; un clic de selección no altera el historial. **Mover PCB** sigue siendo una herramienta explícita para desplazar solo la referencia.
 
-La rueda hace zoom, el botón derecho desplaza la vista y el panel lateral tiene desplazamiento. Hay deshacer/rehacer; los campos de texto conservan sus propios atajos. El ejemplo `examples/demo.panel.json` es sintético y no representa la PCB real de distorsión.
+La rueda hace zoom, el botón derecho desplaza la vista y el panel lateral tiene desplazamiento. Hay deshacer/rehacer; los campos de texto conservan sus propios atajos. El ejemplo `examples/demo.panel.json` es sintético y no representa un diseño real.
+
+### Colocar agujeros desde los footprints de la PCB
+
+En **2 · PCB de referencia**, pulsa **Agujeros desde footprints…**. El diálogo lee una PCB Allegro `.brd` guardada mediante el Extracta instalado, sin modificarla ni abrirla para edición. También admite una referencia `.pcb-components.json` previamente extraída; los datos quedan incorporados al proyecto portátil. La lectura se hace en segundo plano. Los Gerber por sí solos no contienen las identidades de componentes que necesita esta función.
+
+Revisa la tabla de componentes, centros X/Y del panel, diámetro y acción. Doble clic o Espacio marca/desmarca filas. Los círculos violetas son previsualización y **Cancelar** no modifica el proyecto. **Aplicar seleccionados** añade o actualiza los agujeros reconocidos en una sola acción de deshacer. Repetirlo no duplica sus agujeros; los objetos manuales se conservan. Una coincidencia con un agujero manual se conserva y los solapes o agujeros fuera del frontal quedan desmarcados para revisión.
+
+La biblioteca inicial reconoce nombres exactos:
+
+| Footprint | Centro mecánico utilizado | Diámetro inicial editable |
+|---|---|---:|
+| `SPTR_RK09_123` | Centro entre sus dos anclajes mecánicos sin número de pin | 7 mm |
+| `SPTR_PJ301M` | Centro del padstack `C150_H300`, situado bajo el casquillo | 6 mm |
+| `SPTR_SPDT` | Centro del pin 2 | 6,5 mm |
+
+Los diámetros son plantillas para ajustar al componente físico y los anclajes deben corresponder a su footprint. No se utiliza el centro de los pads eléctricos como aproximación. Las posiciones absolutas de pines extraídas por Cadence ya incluyen giro y espejo, por lo que no se vuelve a girar ni reflejar el agujero. La cara de cada regla se elige explícitamente; inicialmente es TOP. Los componentes sin colocar, sin regla, de otra cara o con anclajes ambiguos no generan agujeros por suposición.
+
+En **Regla de tu biblioteca** puedes asociar otros nombres de footprint a un tipo, diámetro y centro (dos anclajes mecánicos, pin, padstack u origen explícito). **Guardar regla y recalcular** prepara los cambios en el diálogo; se incorporan al proyecto con **Aplicar seleccionados** y **Guardar**. **Importar/Exportar biblioteca de reglas…** permite reutilizarlos en otros módulos.
+
+Los agujeros generados conservan la referencia del componente y siguen a la PCB al centrarla, desplazarla o cambiar el ancho del frontal. Siguen pudiéndose arrastrar y editar: un ajuste manual conserva su desplazamiento relativo a la PCB. Una nueva generación explícita vuelve a proponer el centro de la regla y su diámetro. Al cargar otra PCB de referencia, los agujeros anteriores quedan como objetos editables sin vinculación a la nueva placa.
+
+La importación comprueba la coincidencia de límites de contorno y, si hay Excellon cargado, contrasta los pines THT con los taladros para detectar una versión desalineada. Actualmente la extracción de contorno desde Allegro admite líneas y rectángulos en `BOARD GEOMETRY/DESIGN_OUTLINE` u `OUTLINE`; se rechazan otros contornos. Esto no lee cambios de Allegro que aún no estén guardados. El lector utiliza los campos documentados de las vistas COMPONENT, COMPOSITE_PAD y FULL_GEOMETRY de la instalación Cadence.
 
 ### Alcance de esta primera versión
 
 El SVG es un plano vectorial para continuar el diseño: los círculos representan cortes/agujeros, no taladros Excellon. Los textos permanecen editables y dependen de la fuente Arial/sans-serif; antes de fabricar, conviértelos a trazados en tu editor vectorial y comprueba medidas y encaje mecánico. La aplicación no comprueba distancias de tuercas, cuerpos de potenciómetros, componentes ni profundidad detrás del panel. Avisa de agujeros que se solapan o salen del borde; el aviso de posición del texto corresponde a su centro, no a toda su extensión tipográfica.
 
-La referencia admite Gerber absoluto con supresión de ceros iniciales, aperturas C/R/O, líneas, arcos multicuadrante aproximados y regiones simples. Se admiten las declaraciones de transformación identidad de Allegro; se rechazan macros, transformaciones no soportadas, regiones de varios contornos y otros formatos de coordenadas. No se exportan los Gerber cargados desde este espacio de trabajo. Se ha comprobado la carga del contorno y serigrafía superior reales de la PCB de distorsión (128,5 × 110 mm); siguen pendientes la revisión visual de polaridades complejas y la validación del encaje mecánico.
+La referencia admite Gerber absoluto con supresión de ceros iniciales, aperturas C/R/O, líneas, arcos multicuadrante aproximados y regiones simples. Se admiten las declaraciones de transformación identidad de Allegro; se rechazan macros, transformaciones no soportadas, regiones de varios contornos y otros formatos de coordenadas. No se exportan los Gerber cargados desde este espacio de trabajo. La revisión de polaridades complejas y la validación del encaje mecánico corresponden a cada diseño.
 
 ### Comprobaciones
 
@@ -70,7 +92,7 @@ Las pruebas verifican unidades y aperturas, trazos modales, límites físicos, c
 
 ## Versión inicial
 
-Incorporada el 22 de octubre de 2026 como copia exacta del script existente. El hash de `BASELINE.md` identifica esa primera versión. El 23 de octubre se añadió el espacio de frontales y se corrigieron delimitadores, selección G54, operaciones modales y conversión de aperturas del lector para poder cargar las referencias a escala real. La primera carga de la distorsión verifica dimensiones y geometría reconocida; no equivale a validar el panel para fabricación.
+Incorporada el 22 de octubre de 2026 como copia exacta del script existente. El hash de `BASELINE.md` identifica esa primera versión. El 23 de octubre se añadió el espacio de frontales y se corrigieron delimitadores, selección G54, operaciones modales y conversión de aperturas del lector para poder cargar las referencias a escala real. La comprobación del lector no equivale a validar un panel para fabricación.
 
 Origen y verificación: [BASELINE.md](BASELINE.md).
 
