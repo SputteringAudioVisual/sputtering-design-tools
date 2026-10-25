@@ -190,6 +190,10 @@ class Element:
     size: float
     text: str = ''
     hole_type: str = ''
+    source_ref: str = ''
+    source_footprint: str = ''
+    board_x: float | None = None
+    board_y: float | None = None
 
     def __post_init__(self):
         if self.kind not in {'hole', 'text'}:
@@ -203,6 +207,10 @@ class Element:
             raise ValueError('Solo los agujeros pueden tener un tipo de montaje.')
         if self.kind == 'text' and not self.text.strip():
             raise ValueError("Escribe un texto.")
+        if self.source_ref:
+            if self.kind != 'hole' or not self.source_footprint:
+                raise ValueError('Referencia de footprint incompleta.')
+            self.board_x, self.board_y = number(self.board_x), number(self.board_y)
 
     @property
     def is_rack_mount(self):
@@ -220,6 +228,8 @@ class PanelDocument:
     pcb_dx: float = 0
     pcb_dy: float = 0
     elements: list = field(default_factory=list)
+    component_data: dict | None = None
+    footprint_rules: dict = field(default_factory=dict)
 
     def __post_init__(self):
         hp = number(self.hp, 2, 168)
@@ -230,6 +240,11 @@ class PanelDocument:
         self.pcb_dx, self.pcb_dy = number(self.pcb_dx), number(self.pcb_dy)
         if self.layers and not (isinstance(self.reference_index, int) and 0 <= self.reference_index < len(self.layers)):
             raise ValueError("La capa de referencia no existe.")
+        if self.component_data is not None or self.footprint_rules:
+            from footprint_holes import validate_data, validate_rules
+            if self.component_data is not None:
+                self.component_data = validate_data(self.component_data)
+            self.footprint_rules = validate_rules(self.footprint_rules)
 
     @property
     def width(self):
@@ -253,6 +268,49 @@ class PanelDocument:
         if bounds:
             self.pcb_dx = self.width / 2 - (bounds[0] + bounds[2]) / 2
             self.pcb_dy = HEIGHT_MM / 2 - (bounds[1] + bounds[3]) / 2
+            self.sync_footprint_holes()
+
+    def sync_footprint_holes(self):
+        for e in self.elements:
+            if e.source_ref:
+                e.x, e.y = e.board_x+self.pcb_dx, e.board_y+self.pcb_dy
+
+    def detach_footprint_holes(self):
+        self.component_data = None
+        for e in self.elements:
+            e.source_ref, e.source_footprint = '', ''
+            e.board_x = e.board_y = None
+
+    def apply_footprint_holes(self, data, rules, selected_refs):
+        from footprint_holes import proposals, validate_data, validate_rules
+        data, rules = validate_data(data), validate_rules(rules)
+        drills = [(p['x'],p['y']) for r in self.layers if r.coord_format for p in r.layer.drawables]
+        items, skipped = proposals(data, rules, self.reference_bounds(), drills)
+        selected = set(selected_refs)
+        if not selected.issubset({item['refdes'] for item in items}):
+            raise ValueError('Hay componentes seleccionados sin una propuesta válida.')
+        updates, collisions = [], []
+        for item in items:
+            if item['refdes'] not in selected:
+                continue
+            x,y = item['x_mm']+self.pcb_dx, item['y_mm']+self.pcb_dy
+            radius=item['diameter_mm']/2
+            if not (radius <= x <= self.width-radius and radius <= y <= HEIGHT_MM-radius):
+                raise ValueError(f"{item['refdes']}: el agujero queda fuera del frontal.")
+            owned = [e for e in self.elements if e.source_ref == item['refdes']]
+            if not owned and any(e.kind == 'hole' and not e.source_ref and
+                                 math.hypot(e.x-x,e.y-y) < .05 for e in self.elements):
+                collisions.append(item['refdes'])
+                continue
+            if any(e.kind == 'hole' and not e.source_ref and
+                   math.hypot(e.x-x,e.y-y) < (e.size+item['diameter_mm'])/2 for e in self.elements):
+                raise ValueError(f"{item['refdes']}: se solapa con un agujero manual. Revisa o retira ese agujero antes de generar este centro.")
+            updates.append(Element('hole',x,y,item['diameter_mm'],item['refdes'],item['hole_type'],
+                                   item['refdes'],item['footprint'],item['x_mm'],item['y_mm']))
+        replaced = {e.source_ref for e in updates}
+        self.elements = [e for e in self.elements if not e.source_ref or e.source_ref not in replaced]+updates
+        self.component_data, self.footprint_rules = data, rules
+        return len(updates), collisions, skipped
 
     def mounting_holes(self):
         if self.hp < 4:
@@ -283,7 +341,8 @@ class PanelDocument:
         return {'schema': SCHEMA, 'hp': self.hp, 'gap': self.gap,
                 'layers': [ref.serialise() for ref in self.layers],
                 'reference_index': self.reference_index, 'pcb_dx': self.pcb_dx,
-                'pcb_dy': self.pcb_dy, 'elements': [asdict(e) for e in self.elements]}
+                'pcb_dy': self.pcb_dy, 'elements': [asdict(e) for e in self.elements],
+                'component_data': self.component_data, 'footprint_rules': self.footprint_rules}
 
     @classmethod
     def from_dict(cls, value):
@@ -292,7 +351,8 @@ class PanelDocument:
         return cls(hp=value['hp'], gap=value['gap'],
                    layers=[Reference(**ref) for ref in value['layers']],
                    reference_index=value['reference_index'], pcb_dx=value['pcb_dx'],
-                   pcb_dy=value['pcb_dy'], elements=[Element(**e) for e in value['elements']])
+                   pcb_dy=value['pcb_dy'], elements=[Element(**e) for e in value['elements']],
+                   component_data=value.get('component_data'), footprint_rules=value.get('footprint_rules', {}))
 
     def save(self, path):
         atomic_write(path, json.dumps(self.to_dict(), ensure_ascii=False, indent=2))
