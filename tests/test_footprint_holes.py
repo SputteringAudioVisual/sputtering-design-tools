@@ -214,4 +214,94 @@ class FootprintWindowTests(unittest.TestCase):
         finally:app.destroy()
 
 
+class RefdesLabelTests(unittest.TestCase):
+    def document(self):
+        d=PanelDocument(layers=[Reference('OUTLINE.art',BOARD)],component_data=sample())
+        d.center_pcb()
+        return d
+
+    def test_only_components_with_registered_holes_get_labels(self):
+        d=self.document();labels,_=d.refdes_labels(sample(),DEFAULT_RULES)
+        self.assertEqual([e.text for e in labels],['P1','J1','S1'])
+        pot=labels[0]
+        self.assertEqual(pot.x,2.5+d.pcb_dx)
+        self.assertEqual(pot.y,7+d.pcb_dy+3.5+1+1.25)
+        below,_=d.refdes_labels(sample(),DEFAULT_RULES,size=3,gap=2,position='below')
+        self.assertEqual(below[0].y,7+d.pcb_dy-3.5-2-1.5)
+
+    def test_label_uses_actual_moved_hole_and_its_edited_diameter(self):
+        d=self.document();d.apply_footprint_holes(sample(),DEFAULT_RULES,['P1'])
+        h=d.elements[0];h.x+=2;h.y+=3;h.size=8
+        labels,_=d.refdes_labels(sample(),DEFAULT_RULES)
+        self.assertEqual((labels[0].x,labels[0].y),(h.x,h.y+4+1+1.25))
+
+    def test_repeat_preserves_edited_labels_and_hole_regeneration_keeps_text(self):
+        d=self.document();d.apply_refdes_labels(sample(),DEFAULT_RULES,['P1','J1'])
+        label=d.elements[0];label.text='Manual name';label.x+=2;label.board_x+=2
+        count,preserved,_=d.apply_refdes_labels(sample(),DEFAULT_RULES,['P1','J1'])
+        self.assertEqual((count,set(preserved)),(0,{'P1','J1'}))
+        d.apply_footprint_holes(sample(),DEFAULT_RULES,['P1','J1'])
+        self.assertEqual(len(d.elements),4)
+        self.assertIn(label,d.elements)
+        before=[(e.text,e.x,e.y) for e in d.elements if e.kind=='text']
+        d.apply_footprint_holes(sample(),DEFAULT_RULES,['P1'])
+        self.assertEqual([(e.text,e.x,e.y) for e in d.elements if e.kind=='text'],before)
+
+    def test_manual_refdes_is_not_duplicated_and_roundtrip_follows_pcb(self):
+        d=self.document();manual=Element('text',10,10,2.5,' j1 ');d.elements.append(manual)
+        count,preserved,_=d.apply_refdes_labels(sample(),DEFAULT_RULES,['P1','J1'])
+        self.assertEqual((count,preserved),(1,['J1']))
+        d=PanelDocument.from_dict(d.to_dict());label=d.elements[1];old=label.x
+        d.hp+=4;d.center_pcb()
+        self.assertAlmostEqual(label.x,old+4*5.08/2)
+        self.assertEqual((d.elements[0].x,d.elements[0].y),(10,10))
+        self.assertIn('P1',d.svg())
+
+    def test_invalid_label_import_is_atomic(self):
+        d=self.document();before=d.to_dict()
+        for options in [dict(size=0),dict(position='left'),dict(gap=-1),dict(gap=50)]:
+            with self.assertRaises(ValueError):d.apply_refdes_labels(sample(),DEFAULT_RULES,['S1'],**options)
+            self.assertEqual(d.to_dict(),before)
+        with self.assertRaises(ValueError):d.apply_refdes_labels(sample(),DEFAULT_RULES,['R1'])
+        self.assertEqual(d.to_dict(),before)
+
+    def test_text_preview_cancel_apply_undo_and_clear(self):
+        from panel_editor import PanelEditor
+        from footprint_dialog import FootprintDialog
+        app=PanelEditor();app.withdraw()
+        try:
+            app.document=self.document();app.refresh();before=app.document.to_dict()
+            dialog=FootprintDialog(app,mode='texts')
+            self.assertEqual(dialog.checked,{'P1','J1','S1'})
+            self.assertEqual({app.canvas.type(i) for i in app.canvas.find_withtag('footprint_preview')},{'text'})
+            dialog.close();self.assertEqual(app.document.to_dict(),before)
+            dialog=FootprintDialog(app,mode='texts');dialog.text_gap.set('-1');dialog.refresh()
+            self.assertFalse(dialog.checked)
+            dialog.text_gap.set('1');dialog.refresh();dialog.apply()
+            self.assertEqual(len(app.document.elements),3)
+            app.undo();self.assertEqual(app.document.to_dict(),before)
+            app.redo();self.assertEqual(len(app.document.elements),3)
+            dialog=FootprintDialog(app,mode='texts');self.assertFalse(dialog.checked);dialog.close()
+            saved=app.document.to_dict();app.clear_elements()
+            self.assertFalse(app.document.elements);self.assertTrue(app.document.component_data)
+            app.undo();self.assertEqual(app.document.to_dict(),saved)
+        finally:app.destroy()
+
+    def test_label_numeric_edit_and_drag_preserve_pcb_link(self):
+        from panel_editor import PanelEditor
+        app=PanelEditor();app.geometry('1100x800');app.update();app.update();app.withdraw()
+        try:
+            app.document=self.document();app.document.apply_refdes_labels(sample(),DEFAULT_RULES,['P1'])
+            app.select(0);app.x.set('40');app.y.set('80');app.text.set('DRIVE');app.size.set('3');app.apply_selection()
+            label=app.document.elements[0]
+            app.mode.set('select');app.snap.set('0');app.draw()
+            event=lambda x,y:SimpleNamespace(x=app.to_canvas(x,y)[0],y=app.to_canvas(x,y)[1])
+            app.press(event(40,80));app.motion(event(45,84));app.release(event(45,84))
+            self.assertAlmostEqual(label.board_x,45-app.document.pcb_dx)
+            app.document.hp+=4;app.document.center_pcb()
+            self.assertAlmostEqual(label.x,45+4*5.08/2)
+            self.assertEqual(label.text,'DRIVE')
+        finally:app.destroy()
+
+
 if __name__=='__main__':unittest.main()
