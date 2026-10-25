@@ -89,6 +89,7 @@ class PanelWorkspace:
         tools = tk.Menu(menu, tearoff=False)
         tools.add_command(label='Abrir editor de imágenes / Gerber original', command=self.open_legacy)
         tools.add_command(label='Guardar proyecto como…', command=lambda: self.save(save_as=True))
+        tools.add_command(label='Vaciar agujeros y textos (conservar PCB)', command=self.clear_elements)
         menu.add_cascade(label='Herramientas', menu=tools)
         self.config(menu=menu)
         split = ttk.Panedwindow(self, orient='horizontal')
@@ -154,6 +155,7 @@ class PanelWorkspace:
         ttk.Checkbutton(refs, text='Mostrar PCB detrás del frontal', variable=self.show_pcb, command=self.draw).pack(anchor='w')
         ttk.Button(refs, text='Centrar PCB sin cambiar su tamaño', command=self.center).pack(fill='x', pady=3)
         ttk.Button(refs, text='Agujeros desde footprints…', command=self.footprint_holes).pack(fill='x', pady=3)
+        ttk.Button(refs, text='Importar textos desde .brd…', command=self.import_refdes).pack(fill='x', pady=3)
         self.pcb_info = ttk.Label(refs, wraplength=265, foreground='#586878')
         self.pcb_info.pack(fill='x')
         controls = section('3 · Colocar y editar')
@@ -250,6 +252,24 @@ class PanelWorkspace:
             self.footprint_dialog.lift()
         else:
             self.footprint_dialog = FootprintDialog(self)
+
+    def import_refdes(self):
+        from footprint_dialog import FootprintDialog
+        if self.footprint_dialog is not None and self.footprint_dialog.winfo_exists():
+            self.footprint_dialog.lift()
+        else:
+            self.footprint_dialog = FootprintDialog(self, mode='texts')
+
+    def clear_elements(self):
+        if self.footprint_dialog is not None and self.footprint_dialog.winfo_exists():
+            self.footprint_dialog.close()
+        if not self.document.elements:
+            return
+        self.remember()
+        self.document.elements.clear()
+        self.selected = None
+        self.changed()
+        self.status.set('Frontal vacío: se conservan PCB, ancho y biblioteca. Deshacer recupera los objetos anteriores.')
 
     def load_paths(self, paths):
         refs, errors = load_references(paths)
