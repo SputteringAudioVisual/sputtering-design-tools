@@ -46,7 +46,7 @@ python sputtering_design_tools.py --demo
 2. Elige la capa de contorno en la lista de referencia. Si el nombre contiene `outline`, `profile`, `edge_cuts` o termina en `.gko` / `.gm1`, se propone automáticamente; de lo contrario, confirma la capa manualmente.
 3. Elige un ancho entero de HP y aplica. La altura es 128,5 mm y el ancho físico es `HP × 5,08 − tolerancia`. La tolerancia total inicial es 0,34 mm y se puede cambiar; no representa una medida universal para todos los fabricantes. [Referencia mecánica Doepfer](https://doepfer.de/a100_man/a100m_e.htm).
 4. La PCB se centra en los dos ejes sin escalarla. Todas las capas comparten la misma traslación. **Mover PCB** permite ajustar después su posición. Un aviso indica si sobresale del frontal.
-5. En **Tipo de agujero**, elige **Potenciómetro (Ø7 mm)**, **Jack 3,5 mm (Ø6 mm)**, **SPDT mini (Ø6,5 mm)**, **Tornillo de rack (Ø3,2 mm)** o **Personalizado**. Elegir tipo activa la colocación de agujeros y prepara su nombre y diámetro; no modifica objetos existentes. Los diámetros son plantillas iniciales editables para el casquillo de la pieza, no medidas universales para toda una familia. El tipo y el diámetro realmente usados se guardan en el proyecto. Para editar un agujero ya colocado, selecciónalo, cambia su diámetro y pulsa **Aplicar al objeto seleccionado**.
+5. En **Tipo de agujero**, elige **Potenciómetro (Ø8,128 mm)**, **Jack 3,5 mm (Ø6,1 mm)**, **SPDT mini (Ø6,5 mm)**, **Tornillo de rack (Ø3,2 mm)** o **Personalizado**. Elegir tipo activa la colocación de agujeros y prepara su nombre y diámetro; no modifica objetos existentes. Los diámetros son plantillas iniciales editables para el casquillo de la pieza, no medidas universales para toda una familia. El tipo y el diámetro realmente usados se guardan en el proyecto. Para editar un agujero ya colocado, selecciónalo, cambia su diámetro y pulsa **Aplicar al objeto seleccionado**.
 6. Haz clic para colocar o introduce X/Y y pulsa **Añadir en X / Y**. El origen es la esquina inferior izquierda; X/Y son el centro del objeto. **Texto** utiliza el tamaño como altura tipográfica. Arrastra para mover. La rejilla inicial es 0,5 mm; usa 0 para desactivarla. **Actualizar tornillos de rack Ø3,2** sustituye el patrón anterior, incluso en proyectos antiguos con duplicados, y conserva los agujeros de controles y textos. Al aplicar otro ancho, los tornillos de rack existentes se actualizan automáticamente. Ambas acciones admiten deshacer/rehacer.
 7. Guarda en `.panel.json`: incluye las capas de referencia para que el proyecto sea portátil. **Exportar SVG** genera el frontal a escala 1:1, separando contorno, agujeros y textos; no incluye la PCB de referencia.
 
@@ -64,11 +64,13 @@ La biblioteca inicial reconoce nombres exactos:
 
 | Footprint | Centro mecánico utilizado | Diámetro inicial editable |
 |---|---|---:|
-| `SPTR_RK09_123` | Centro entre sus dos anclajes mecánicos sin número de pin | 7 mm |
-| `SPTR_PJ301M` | Centro del padstack `C150_H300`, situado bajo el casquillo | 6 mm |
+| `SPTR_RK09_123` | Centro entre sus dos anclajes mecánicos sin número de pin | 8,128 mm |
+| `SPTR_PJ301M` | Centro del padstack `C150_H300`, situado bajo el casquillo | 6,1 mm |
 | `SPTR_SPDT` | Centro del pin 2 | 6,5 mm |
 
 Los diámetros son plantillas para ajustar al componente físico y los anclajes deben corresponder a su footprint. No se utiliza el centro de los pads eléctricos como aproximación. Las posiciones absolutas de pines extraídas por Cadence ya incluyen giro y espejo, por lo que no se vuelve a girar ni reflejar el agujero. La cara de cada regla se elige explícitamente; inicialmente es TOP. Los componentes sin colocar, sin regla, de otra cara o con anclajes ambiguos no generan agujeros por suposición.
+
+Los valores iniciales de potenciómetro (8,128 mm), jack (6,1 mm) y rack (3,2 mm) se toman de una referencia de frontal existente. Se conserva exactamente 8,128 mm, sin redondear a 8 mm. La medida SPDT (6,5 mm) sigue siendo una plantilla editable, sin verificar en esa referencia. Los proyectos antiguos conservan sus medidas y reglas guardadas; cambiar el preajuste no modifica automáticamente sus agujeros.
 
 En **Regla de tu biblioteca** puedes asociar otros nombres de footprint a un tipo, diámetro y centro (dos anclajes mecánicos, pin, padstack u origen explícito). **Guardar regla y recalcular** prepara los cambios en el diálogo; se incorporan al proyecto con **Aplicar seleccionados** y **Guardar**. **Importar/Exportar biblioteca de reglas…** permite reutilizarlos en otros módulos.
 
