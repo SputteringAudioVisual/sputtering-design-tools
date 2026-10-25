@@ -40,14 +40,15 @@ def number(value, minimum=None, maximum=None):
 
 def atomic_write(path, text):
     path = Path(path)
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', newline='\n',
-                                     dir=path.parent, delete=False) as stream:
-        temporary = Path(stream.name)
-        stream.write(text)
+    temporary = None
     try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', newline='\n',
+                                         dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(text)
         temporary.replace(path)
     finally:
-        temporary.unlink(missing_ok=True)
+        if temporary is not None:temporary.unlink(missing_ok=True)
 
 
 def geometry_bounds(layer, outline=False):
@@ -208,7 +209,7 @@ class Element:
         if self.kind == 'text' and not self.text.strip():
             raise ValueError("Escribe un texto.")
         if self.source_ref:
-            if self.kind != 'hole' or not self.source_footprint:
+            if not self.source_footprint:
                 raise ValueError('Referencia de footprint incompleta.')
             self.board_x, self.board_y = number(self.board_x), number(self.board_y)
 
@@ -271,6 +272,7 @@ class PanelDocument:
             self.sync_footprint_holes()
 
     def sync_footprint_holes(self):
+        # Both generated holes and refdes labels share the PCB translation.
         for e in self.elements:
             if e.source_ref:
                 e.x, e.y = e.board_x+self.pcb_dx, e.board_y+self.pcb_dy
@@ -297,7 +299,7 @@ class PanelDocument:
             radius=item['diameter_mm']/2
             if not (radius <= x <= self.width-radius and radius <= y <= HEIGHT_MM-radius):
                 raise ValueError(f"{item['refdes']}: el agujero queda fuera del frontal.")
-            owned = [e for e in self.elements if e.source_ref == item['refdes']]
+            owned = [e for e in self.elements if e.kind == 'hole' and e.source_ref == item['refdes']]
             if not owned and any(e.kind == 'hole' and not e.source_ref and
                                  math.hypot(e.x-x,e.y-y) < .05 for e in self.elements):
                 collisions.append(item['refdes'])
@@ -308,9 +310,58 @@ class PanelDocument:
             updates.append(Element('hole',x,y,item['diameter_mm'],item['refdes'],item['hole_type'],
                                    item['refdes'],item['footprint'],item['x_mm'],item['y_mm']))
         replaced = {e.source_ref for e in updates}
-        self.elements = [e for e in self.elements if not e.source_ref or e.source_ref not in replaced]+updates
+        self.elements = [e for e in self.elements if e.kind != 'hole' or e.source_ref not in replaced]+updates
         self.component_data, self.footprint_rules = data, rules
         return len(updates), collisions, skipped
+
+    def refdes_labels(self, data, rules, size=2.5, gap=1.0, position='above'):
+        """Propose labels for the same mechanically registered components as holes."""
+        from footprint_holes import proposals
+        size, gap = number(size, .5, 20), number(gap, 0, 50)
+        if position not in {'above', 'below'}:
+            raise ValueError('Elige encima o debajo del agujero.')
+        drills = [(p['x'],p['y']) for r in self.layers if r.coord_format for p in r.layer.drawables]
+        items, skipped = proposals(data, rules, self.reference_bounds(), drills)
+        holes = {e.source_ref: e for e in self.elements if e.kind == 'hole' and e.source_ref}
+        result = []
+        for item in items:
+            hole = holes.get(item['refdes'])
+            x = hole.x if hole else item['x_mm']+self.pcb_dx
+            cy = hole.y if hole else item['y_mm']+self.pcb_dy
+            radius = (hole.size if hole else item['diameter_mm'])/2
+            y = cy+(radius+gap+size/2)*(1 if position == 'above' else -1)
+            result.append(Element('text', x, y, size, item['refdes'],
+                                  source_ref=item['refdes'], source_footprint=item['footprint'],
+                                  board_x=x-self.pcb_dx, board_y=y-self.pcb_dy))
+        return result, skipped
+
+    def apply_refdes_labels(self, data, rules, selected_refs, size=2.5, gap=1.0, position='above'):
+        from footprint_holes import validate_data, validate_rules
+        data, rules = validate_data(data), validate_rules(rules)
+        labels, skipped = self.refdes_labels(data, rules, size, gap, position)
+        selected = set(selected_refs)
+        if not selected.issubset({e.source_ref for e in labels}):
+            raise ValueError('Hay componentes seleccionados sin etiqueta válida.')
+        updates, preserved = [], []
+        for label in labels:
+            if label.source_ref not in selected:
+                continue
+            # Conservative width estimate matches centred Arial preview/export.
+            half_width = len(label.text)*label.size*.4
+            if not (half_width <= label.x <= self.width-half_width and
+                    label.size/2 <= label.y <= HEIGHT_MM-label.size/2):
+                raise ValueError(f'{label.source_ref}: la etiqueta queda fuera del frontal.')
+            owned = [e for e in self.elements if e.kind == 'text' and e.source_ref == label.source_ref]
+            manual = [e for e in self.elements if e.kind == 'text' and not e.source_ref and
+                      e.text.strip().casefold() == label.text.casefold()]
+            if manual or owned:
+                # Keep hand-edited label text and offsets on repeated imports.
+                preserved.append(label.source_ref)
+                continue
+            updates.append(label)
+        self.elements.extend(updates)
+        self.component_data, self.footprint_rules = data, rules
+        return len(updates), preserved, skipped
 
     def mounting_holes(self):
         if self.hp < 4:
