@@ -2,6 +2,16 @@
 
 Estado: versión comprobada en uso por Luis. Desarrollo cerrado por ahora; se retomará cuando aparezca un fallo concreto. No se inicia una nueva ronda de rediseño ni de funciones.
 
+## Automatización del frontal — 25 de octubre de 2026
+
+Nueva opción **Agujeros desde footprints…**, con lectura de Allegro guardado mediante Extracta o una referencia JSON portátil. Se conserva el flujo de serigrafía. La biblioteca relaciona cada footprint con su tipo, diámetro, cara y anclaje mecánico. Admite editar esas reglas y exportarlas/importarlas para otros módulos.
+
+La revisión muestra las propuestas antes de aplicar y dibuja círculos violetas sin modificar el proyecto. Los objetos manuales se conservan; las coincidencias y solapes manuales no se convierten en agujeros duplicados. Las actualizaciones de agujeros generados son idempotentes, admiten deshacer y guardan su referencia/posición relativa para seguir a la PCB al moverla o centrarla. Se mantiene su edición manual y la exportación SVG.
+
+Comprobación real de la distorsión guardada: 23 centros reconocidos (10 potenciómetros, 8 jacks y 5 SPDT), con pines contrastados contra los drills del frontal. El proyecto de 26 HP conserva sus 15 objetos manuales; LVL2 y SCI quedan desmarcados inicialmente por solaparse con agujeros manuales. Se añade únicamente la referencia portátil de componentes al proyecto, con copia previa; los agujeros se aplican desde la revisión.
+
+Pasan 68 pruebas locales, incluidas geometría mecánica, giro/cara mediante pines reales, unidades, componentes sin colocar, anclajes ambiguos, correspondencia con contorno/drills, conservación de manuales, biblioteca reutilizable, guardado/reapertura, vínculo a PCB, edición, previsualización, cancelación y deshacer. La PCB original permanece intacta; no se han subido los diseños de fabricación al repositorio de la herramienta.
+
 ## Actualización del frontal — 24 de octubre de 2026
 
 Se retoma únicamente el frontal a petición de Luis: se corrige la acumulación de tornillos al cambiar HP y se añaden plantillas de agujero para potenciómetro, jack, SPDT, rack y personalizado. El editor de serigrafías conserva su estado validado.
