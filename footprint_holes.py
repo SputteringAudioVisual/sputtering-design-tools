@@ -15,9 +15,9 @@ import tempfile
 
 SCHEMA = 'sputtering.pcb-components.v1'
 DEFAULT_RULES = {
-    'SPTR_RK09_123': dict(hole_type='potentiometer', diameter_mm=7.0,
+    'SPTR_RK09_123': dict(hole_type='potentiometer', diameter_mm=8.128,
                          anchor='mechanical_pair', value='', side='TOP'),
-    'SPTR_PJ301M': dict(hole_type='jack', diameter_mm=6.0,
+    'SPTR_PJ301M': dict(hole_type='jack', diameter_mm=6.1,
                       anchor='padstack', value='C150_H300', side='TOP'),
     'SPTR_SPDT': dict(hole_type='spdt', diameter_mm=6.5,
                      anchor='pin', value='2', side='TOP'),
