@@ -76,6 +76,14 @@ Los agujeros generados conservan la referencia del componente y siguen a la PCB 
 
 La importación comprueba la coincidencia de límites de contorno y, si hay Excellon cargado, contrasta los pines THT con los taladros para detectar una versión desalineada. Actualmente la extracción de contorno desde Allegro admite líneas y rectángulos en `BOARD GEOMETRY/DESIGN_OUTLINE` u `OUTLINE`; se rechazan otros contornos. Esto no lee cambios de Allegro que aún no estén guardados. El lector utiliza los campos documentados de las vistas COMPONENT, COMPOSITE_PAD y FULL_GEOMETRY de la instalación Cadence.
 
+### Importar etiquetas desde la PCB
+
+En **2 · PCB de referencia**, **Importar textos desde .brd…** propone los refdes de los componentes con una regla de agujero. Utiliza la referencia de componentes guardada en el proyecto o permite leer un `.brd` / JSON actualizado. No importa todos los textos de serigrafía ni añade referencias de resistencias sin agujero.
+
+Elige altura de texto, separación respecto al borde del agujero y posición **Encima/Debajo**, y pulsa **Actualizar previsualización**. La tabla y los textos violetas muestran lo que se añadirá; marca las referencias deseadas y pulsa **Aplicar seleccionados**. Los textos quedan editables, se exportan en SVG y admiten deshacer/rehacer. Si has movido o cambiado el diámetro de un agujero generado, la etiqueta usa esa posición y diámetro actuales. Al mover la PCB, las etiquetas generadas la acompañan. Una importación repetida conserva las etiquetas existentes y sus ajustes manuales en lugar de duplicarlas.
+
+**Herramientas → Vaciar agujeros y textos (conservar PCB)** permite empezar el frontal desde cero manteniendo ancho, referencias y biblioteca; se puede deshacer. Los objetos vuelven al reabrir únicamente si forman parte del proyecto guardado: no son archivos temporales. Las lecturas `.brd` utilizan una carpeta temporal independiente que se elimina al finalizar.
+
 ### Alcance de esta primera versión
 
 El SVG es un plano vectorial para continuar el diseño: los círculos representan cortes/agujeros, no taladros Excellon. Los textos permanecen editables y dependen de la fuente Arial/sans-serif; antes de fabricar, conviértelos a trazados en tu editor vectorial y comprueba medidas y encaje mecánico. La aplicación no comprueba distancias de tuercas, cuerpos de potenciómetros, componentes ni profundidad detrás del panel. Avisa de agujeros que se solapan o salen del borde; el aviso de posición del texto corresponde a su centro, no a toda su extensión tipográfica.
