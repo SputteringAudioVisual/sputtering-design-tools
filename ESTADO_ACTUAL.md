@@ -8,7 +8,6 @@ Nueva opción **Agujeros desde footprints…**, con lectura de Allegro guardado 
 
 La revisión muestra las propuestas antes de aplicar y dibuja círculos violetas sin modificar el proyecto. Los objetos manuales se conservan; las coincidencias y solapes manuales no se convierten en agujeros duplicados. Las actualizaciones de agujeros generados son idempotentes, admiten deshacer y guardan su referencia/posición relativa para seguir a la PCB al moverla o centrarla. Se mantiene su edición manual y la exportación SVG.
 
-Comprobación real de la distorsión guardada: 23 centros reconocidos (10 potenciómetros, 8 jacks y 5 SPDT), con pines contrastados contra los drills del frontal. El proyecto de 26 HP conserva sus 15 objetos manuales; LVL2 y SCI quedan desmarcados inicialmente por solaparse con agujeros manuales. Se añade únicamente la referencia portátil de componentes al proyecto, con copia previa; los agujeros se aplican desde la revisión.
 
 Pasan 68 pruebas locales, incluidas geometría mecánica, giro/cara mediante pines reales, unidades, componentes sin colocar, anclajes ambiguos, correspondencia con contorno/drills, conservación de manuales, biblioteca reutilizable, guardado/reapertura, vínculo a PCB, edición, previsualización, cancelación y deshacer. La PCB original permanece intacta; no se han subido los diseños de fabricación al repositorio de la herramienta.
 
@@ -41,8 +40,6 @@ El recorte afecta al borde de la placa. No incorpora separación automática res
 ## Validación del cierre
 
 - 48 pruebas locales pasan en Python 3.12 con Tkinter, Pillow y NumPy. Incluyen el flujo original, conversión, polaridad, exportación, drills, frontal, colocación manual y recorte de contornos cóncavos/con vaciados.
-- Comprobación independiente de la exportación real con Gerbonara 1.6.3: 24.508 trazos de imagen conservados y recorte de los extremos físicos del trazo. Resultado: 0 mm² de tinta fuera del contorno y 0 mm² borrados dentro.
-- La copia recortada `WAVEDISTEQ_3_testrouted_fab_v003_edit_v002.zip` conserva posición y escala. Cobre, máscaras, contorno, serigrafía superior y los 313 taladros permanecen idénticos al paquete anterior. CRC y SHA-256 comprobados; original intacto.
 - Luis confirma que la aplicación funciona correctamente y solicita dejarla en mantenimiento.
 
 Las placas, imágenes y exportaciones reales permanecen en el proyecto local; no son necesarias para ejecutar las pruebas sintéticas del repositorio. Gerbonara se utilizó para la comprobación independiente y no es una dependencia de ejecución de la app. Este cierre valida el editor y su exportación; no sustituye el DRC eléctrico ni la aprobación de fabricación del diseño.
