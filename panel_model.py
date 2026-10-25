@@ -10,6 +10,7 @@ import zipfile
 
 from gerber_silkscreen_editor import GerberLayer
 from drill import DrillLayer, parameter_format
+from panel_fonts import FONTS
 
 HEIGHT_MM = 128.5
 HP_MM = 5.08
@@ -195,6 +196,7 @@ class Element:
     source_footprint: str = ''
     board_x: float | None = None
     board_y: float | None = None
+    font: str = 'sans'
 
     def __post_init__(self):
         if self.kind not in {'hole', 'text'}:
@@ -202,6 +204,7 @@ class Element:
         self.x, self.y = number(self.x), number(self.y)
         self.size = number(self.size, 0.1, 200)
         self.text = str(self.text)
+        if self.font not in FONTS:raise ValueError('Tipografía no reconocida.')
         if self.hole_type not in ('', *HOLE_PRESETS):
             raise ValueError('Tipo de agujero no reconocido.')
         if self.kind != 'hole' and self.hole_type:
@@ -314,7 +317,7 @@ class PanelDocument:
         self.component_data, self.footprint_rules = data, rules
         return len(updates), collisions, skipped
 
-    def refdes_labels(self, data, rules, size=2.5, gap=1.0, position='above'):
+    def refdes_labels(self, data, rules, size=2.5, gap=1.0, position='above', font='sans'):
         """Propose labels for the same mechanically registered components as holes."""
         from footprint_holes import proposals
         size, gap = number(size, .5, 20), number(gap, 0, 50)
@@ -332,13 +335,13 @@ class PanelDocument:
             y = cy+(radius+gap+size/2)*(1 if position == 'above' else -1)
             result.append(Element('text', x, y, size, item['refdes'],
                                   source_ref=item['refdes'], source_footprint=item['footprint'],
-                                  board_x=x-self.pcb_dx, board_y=y-self.pcb_dy))
+                                  board_x=x-self.pcb_dx, board_y=y-self.pcb_dy, font=font))
         return result, skipped
 
-    def apply_refdes_labels(self, data, rules, selected_refs, size=2.5, gap=1.0, position='above'):
+    def apply_refdes_labels(self, data, rules, selected_refs, size=2.5, gap=1.0, position='above', font='sans'):
         from footprint_holes import validate_data, validate_rules
         data, rules = validate_data(data), validate_rules(rules)
-        labels, skipped = self.refdes_labels(data, rules, size, gap, position)
+        labels, skipped = self.refdes_labels(data, rules, size, gap, position, font)
         selected = set(selected_refs)
         if not selected.issubset({e.source_ref for e in labels}):
             raise ValueError('Hay componentes seleccionados sin etiqueta válida.')
@@ -428,5 +431,6 @@ class PanelDocument:
         for element in self.elements:
             if element.kind == 'text':
                 lines.append(f'<text x="{element.x:g}" y="{HEIGHT_MM-element.y:g}" '
+                             f'font-family="{FONTS[element.font][1]}" font-weight="{"bold" if element.font=="console" else "normal"}" '
                              f'font-size="{element.size:g}">{escape(element.text)}</text>')
         return '\n'.join(lines + ['</g>', '</svg>', ''])
