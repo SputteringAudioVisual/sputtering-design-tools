@@ -2,6 +2,14 @@
 
 Estado: versión comprobada en uso por Luis. Desarrollo cerrado por ahora; se retomará cuando aparezca un fallo concreto. No se inicia una nueva ronda de rediseño ni de funciones.
 
+## Fabricación del frontal y fuentes — 25 de octubre de 2026
+
+Se añade **Gerber / ZIP…** para exportar el estado abierto del frontal a RS-274X + Excellon NPTH, contorno, serigrafías, máscaras cerradas y cobre opcional con separación de 0,3 mm. Genera ZIP numerado, vista SVG con tinta fija e informe SHA-256. Rechaza geometría fuera del panel, solapes y tinta sobre agujeros; las referencias de la PCB nunca forman parte del paquete. Los agujeros grandes conservan su diámetro para fresado CNC.
+
+Validación actual: **82 pruebas locales pasan**, además de la lectura independiente de Gerbonara.
+
+Se incorporan Consolas, Old English Text MT y Bahnschrift, con selección por elemento y en la importación de refdes. La fuente se guarda en el proyecto; pantalla, prueba de fabricación y Gerber comparten máscara de tinta. Las fuentes se convierten a geometría y sus archivos no se distribuyen. Las pruebas comprueban contorno/taladros exactos, cobre/máscara, equivalencia de área de tinta, las cuatro fuentes, controles de error, ZIP numerado e importación del documento abierto sin guardar. Un lector independiente Gerbonara contrasta unidades, posiciones/diámetros NPTH, polaridad y área de tinta, incluyendo huecos de caracteres de las cuatro fuentes.
+
 ## Medidas iniciales de agujeros — 25 de octubre de 2026
 
 Se actualizan las plantillas manuales y la biblioteca de footprints a Ø8,128 mm para potenciómetro y Ø6,1 mm para jack, conservando Ø3,2 mm para rack. Los diámetros se contrastan con dos archivos Excellon de un frontal existente; no se publica su geometría. Se mantiene Ø6,5 mm para SPDT porque esa referencia no permite comprobarlo. La exportación conserva los diámetros exactos. Los proyectos guardados mantienen sus medidas y personalizaciones.
