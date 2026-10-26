@@ -22,7 +22,59 @@ DEFAULT_RULES = {
     'SPTR_SPDT': dict(hole_type='spdt', diameter_mm=6.5,
                      anchor='pin', value='2', side='TOP'),
 }
-ANCHORS = {'mechanical_pair', 'padstack', 'pin', 'origin'}
+# Exact library names, with mechanical anchors checked against the .dra assets.
+for _name in ('SPTR_RK09_321','SPTR_RK09_DOBLE','RK09_123','RK09_321'):
+    DEFAULT_RULES[_name] = dict(DEFAULT_RULES['SPTR_RK09_123'])
+DEFAULT_RULES['RK09D1130C1B'] = dict(hole_type='potentiometer',diameter_mm=8.128,
+                                  anchor='pin_pair',value='MH1,MH2',side='TOP')
+DEFAULT_RULES['PJ301M'] = dict(DEFAULT_RULES['SPTR_PJ301M'])
+for _name in ('SPTR_MINISPDT','SPTR_SWITCHER_3POLOS','SPTR_TOOGLE_SWITCH_3POLOS'):
+    DEFAULT_RULES[_name] = dict(DEFAULT_RULES['SPTR_SPDT'],review_required=True)
+for _name in ('SPTR_DPDT','SPTR_SWITCHER_6POLES'):
+    DEFAULT_RULES[_name] = dict(hole_type='dpdt',diameter_mm=6.5,anchor='pin_pair',
+                              value='2,5',side='TOP',review_required=True)
+ANCHORS = {'mechanical_pair', 'padstack', 'pin', 'pin_pair', 'origin'}
+ANCHOR_HINTS = {
+    'SPTR_LED_5MM':dict(anchor='pin_pair',value='1,2'),
+    'SPTR_PUSHBUTTON':dict(anchor='pin_pair',value='1,2'),
+}
+
+
+def shared_library_path():
+    return Path(os.environ.get('LOCALAPPDATA',str(Path.home()/'.config')))/'SputteringDesignTools'/'footprint-hole-rules.json'
+
+
+def library_rules(path=None):
+    rules=copy.deepcopy(DEFAULT_RULES);path=Path(path) if path is not None else shared_library_path()
+    if path.exists():
+        if path.stat().st_size>2_000_000:raise ValueError('La biblioteca común supera 2 MB.')
+        data=json.loads(path.read_text(encoding='utf-8-sig'))
+        if data.get('schema')!='sputtering.footprint-hole-rules.v1':raise ValueError('Biblioteca común no reconocida.')
+        rules.update(validate_rules(data['rules']))
+    return rules
+
+
+def save_shared_library(rules,path=None):
+    from panel_model import atomic_write
+    rules=validate_rules(rules);path=Path(path) if path is not None else shared_library_path()
+    path.parent.mkdir(parents=True,exist_ok=True)
+    atomic_write(path,json.dumps(dict(schema='sputtering.footprint-hole-rules.v1',rules=rules),ensure_ascii=False,indent=2))
+
+
+def library_coverage(data,rules):
+    rows={};rules=validate_rules(rules)
+    for c in validate_data(data)['components']:
+        name=c['footprint'];row=rows.setdefault(name,dict(footprint=name,count=0,ready=0,review=0,problems=[]))
+        row['count']+=1;rule=rules.get(name)
+        if rule is None:
+            row['problems'].append('Centro de referencia disponible; falta definir diámetro/corte' if name in ANCHOR_HINTS else 'Sin regla')
+            continue
+        if rule['side'] not in ('BOTH',c['side']):row['problems'].append('Otra cara');continue
+        try:anchor_point(c,rule)
+        except ValueError as error:row['problems'].append(str(error));continue
+        row['ready']+=1
+        if rule.get('review_required'):row['review']+=1
+    return list(rows.values())
 QUERIES = {
     'components': 'COMPONENT\nREFDES\nCOMP_PACKAGE\nSYM_X\nSYM_Y\nSYM_ROTATE\nSYM_MIRROR\nEND\n',
     'pins': 'COMPOSITE_PAD\nCLASS!="VIA CLASS"\nREFDES\nPIN_NUMBER\nPAD_STACK_NAME\nPIN_X\nPIN_Y\nEND\n',
@@ -184,11 +236,16 @@ def validate_rules(rules):
         rule['diameter_mm'] = finite(rule['diameter_mm'])
         if not .1 <= rule['diameter_mm'] <= 200 or rule['anchor'] not in ANCHORS:
             raise ValueError(f'{name}: regla o diámetro inválido.')
-        if rule['hole_type'] not in {'potentiometer','jack','spdt','custom'} or rule.get('side') not in {'TOP','BOTTOM'}:
+        if rule['hole_type'] not in {'potentiometer','jack','spdt','dpdt','custom'} or rule.get('side') not in {'TOP','BOTTOM','BOTH'}:
             raise ValueError(f'{name}: tipo de agujero o cara inválidos.')
         rule['value'] = str(rule.get('value','')).strip()
-        if rule['anchor'] in {'pin','padstack'} and not rule['value']:
+        if rule['anchor'] in {'pin','padstack','pin_pair'} and not rule['value']:
             raise ValueError(f'{name}: indica el pin o padstack de referencia.')
+        if rule['anchor']=='pin_pair' and (len(rule['value'].split(','))!=2 or
+                any(not p.strip() for p in rule['value'].split(',')) or
+                len(set(p.strip() for p in rule['value'].split(',')))!=2):
+            raise ValueError(f'{name}: indica dos pines distintos separados por coma.')
+        if 'review_required' in rule and not isinstance(rule['review_required'],bool):raise ValueError('Revisión de regla inválida.')
         result[str(name).strip().upper()] = rule
     return result
 
@@ -203,6 +260,11 @@ def anchor_point(component, rule):
     elif anchor == 'pin':
         selected = [p for p in pins if p['number'] == rule['value']]
         expected = 1
+    elif anchor == 'pin_pair':
+        names={p.strip() for p in rule['value'].split(',')}
+        selected=[p for p in pins if p['number'] in names]
+        expected=2
+        if {p['number'] for p in selected}!=names:raise ValueError('Falta uno de los dos pines de anclaje.')
     else:
         selected = [p for p in pins if p['padstack'].upper() == rule['value'].upper()]
         expected = 1
@@ -227,7 +289,7 @@ def proposals(data, rules, bounds, drills=()):
         rule = rules.get(c['footprint'])
         if rule is None:
             continue
-        if c['side'] != rule['side']:
+        if rule['side'] not in ('BOTH',c['side']):
             skipped.append((c['refdes'], 'Cara distinta de la configurada en la regla.'))
             continue
         if drill_points and any(not matches(p['x_mm'],p['y_mm']) for p in c['pins']):
@@ -241,5 +303,6 @@ def proposals(data, rules, bounds, drills=()):
             skipped.append((c['refdes'], 'Centro fuera del contorno de la PCB.'))
             continue
         result.append(dict(refdes=c['refdes'], footprint=c['footprint'], x_mm=x,y_mm=y,
-                           diameter_mm=rule['diameter_mm'], hole_type=rule['hole_type'], side=c['side']))
+                           diameter_mm=rule['diameter_mm'], hole_type=rule['hole_type'], side=c['side'],
+                           review_required=rule.get('review_required',False)))
     return result, skipped
