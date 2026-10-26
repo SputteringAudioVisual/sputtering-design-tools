@@ -8,7 +8,7 @@ import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageTk
-from panel_fonts import FONTS, text_mask, PIXEL_MM
+from panel_fonts import FONTS, element_mask, PIXEL_MM
 
 from panel_model import PanelDocument, Element, HEIGHT_MM, HOLE_PRESETS, number, load_references, atomic_write
 
@@ -40,8 +40,14 @@ class PanelWorkspace:
         self.x = tk.StringVar(value='0')
         self.y = tk.StringVar(value='0')
         self.size = tk.StringVar(value='6.5')
-        self.text = tk.StringVar(value='DRIVE')
+        self.text = tk.StringVar(value='TEXTO')
         self.font_choice = tk.StringVar(value=FONTS['sans'][0])
+        self.text_angle=tk.StringVar(value='0')
+        self.text_width=tk.StringVar(value='100')
+        self.text_tracking=tk.StringVar(value='0')
+        self.text_lines=tk.StringVar(value='1.2')
+        self.text_gain=tk.StringVar(value='0.075')
+        self.text_align=tk.StringVar(value='Centrado')
         self._text_images = []
         self.hole_preset = tk.StringVar(value=HOLE_PRESETS['potentiometer'][0])
         self._build()
@@ -81,6 +87,8 @@ class PanelWorkspace:
                 widget.configure(bg='#1a1a2e', fg='#cccce0', selectbackground='#3a3a5c', highlightthickness=0)
             elif isinstance(widget, tk.Canvas) and widget is not self.canvas:
                 widget.configure(bg='#252535')
+            elif isinstance(widget,tk.Text):
+                widget.configure(bg='#1a1a2e',fg='#cccce0',insertbackground='white',highlightthickness=0)
 
     def _build(self):
         toolbar = ttk.Frame(self, padding=(10, 8))
@@ -93,6 +101,7 @@ class PanelWorkspace:
         tools = tk.Menu(menu, tearoff=False)
         tools.add_command(label='Abrir editor de imágenes / Gerber original', command=self.open_legacy)
         tools.add_command(label='Guardar proyecto como…', command=lambda: self.save(save_as=True))
+        tools.add_command(label='Nuevo módulo / frontal',command=self.new_panel)
         tools.add_command(label='Vaciar agujeros y textos (conservar PCB)', command=self.clear_elements)
         menu.add_cascade(label='Herramientas', menu=tools)
         self.config(menu=menu)
@@ -179,12 +188,31 @@ class PanelWorkspace:
         entry(controls, 'X desde izquierda', self.x)
         entry(controls, 'Y desde abajo', self.y)
         entry(controls, 'Diám. / texto (mm)', self.size)
-        entry(controls, 'Texto / nombre', self.text)
+        ttk.Label(controls,text='Texto / nombre · admite varias líneas:').pack(anchor='w')
+        self.text_box=tk.Text(controls,height=3,width=24,wrap='none',undo=True)
+        self.text_box.pack(fill='x',pady=3)
+        self.text_box.insert('1.0',self.text.get());self.text_box.edit_modified(False)
+        def text_changed(event=None):
+            if self.text_box.edit_modified():
+                self.text.set(self.text_box.get('1.0','end-1c'));self.text_box.edit_modified(False)
+        def sync_text(*args):
+            if self.text_box.get('1.0','end-1c')!=self.text.get():
+                self.text_box.delete('1.0','end');self.text_box.insert('1.0',self.text.get());self.text_box.edit_modified(False)
+        self.text_box.bind('<<Modified>>',text_changed);self.text.trace_add('write',sync_text)
         ttk.Label(controls,text='Tipografía del texto:').pack(anchor='w')
         ttk.Combobox(controls,textvariable=self.font_choice,state='readonly',
                      values=[v[0] for v in FONTS.values()]).pack(fill='x',pady=3)
+        entry(controls,'Giro del texto (°)',self.text_angle)
+        entry(controls,'Ancho de texto (%)',self.text_width)
+        entry(controls,'Espacio letras (mm)',self.text_tracking)
+        entry(controls,'Interlineado',self.text_lines)
+        entry(controls,'Engrosado (mm/lado)',self.text_gain)
+        ttk.Combobox(controls,textvariable=self.text_align,state='readonly',
+                     values=['Izquierda','Centrado','Derecha']).pack(fill='x',pady=3)
         ttk.Button(controls, text='Añadir en X / Y', command=self.add_numeric).pack(fill='x', pady=(5, 2))
         ttk.Button(controls, text='Aplicar al objeto seleccionado', command=self.apply_selection).pack(fill='x', pady=2)
+        ttk.Button(controls,text='Aplicar estilo a todos los textos',command=self.style_all_texts).pack(fill='x',pady=2)
+        ttk.Button(controls,text='Duplicar objeto seleccionado',command=self.duplicate_selected).pack(fill='x',pady=2)
         ttk.Label(controls, text='Clic vacío: colocar. Sobre un objeto: seleccionar y arrastrar, también en modo Agujero/Texto.\nEsc: seleccionar. Rueda: zoom.\nBotón derecho: desplazar la vista.',
                   wraplength=265, foreground='#586878').pack(anchor='w', pady=4)
         objects = section('4 · Objetos del frontal')
@@ -278,6 +306,14 @@ class PanelWorkspace:
         self.changed()
         self.status.set('Frontal vacío: se conservan PCB, ancho y biblioteca. Deshacer recupera los objetos anteriores.')
 
+    def new_panel(self):
+        if not self.confirm_discard():return
+        if self.footprint_dialog is not None and self.footprint_dialog.winfo_exists():self.footprint_dialog.close()
+        self.document=PanelDocument();self.project_path=None;self.selected=None;self.drag=None
+        self.history.clear();self.future.clear();self.dirty=False;self.mode.set('select');self.text.set('TEXTO')
+        self.refresh();self.fit()
+        self.status.set('Nuevo módulo: carga sus Gerber y después su .brd. La biblioteca común se reutiliza al importar.')
+
     def load_paths(self, paths):
         refs, errors = load_references(paths)
         if refs:
@@ -349,7 +385,7 @@ class PanelWorkspace:
         if self.mode.get() == 'text':
             self.size.set('3')
             if self.text.get() in {p[2] for p in HOLE_PRESETS.values()}:
-                self.text.set('DRIVE')
+                self.text.set('TEXTO')
         elif self.mode.get() == 'hole':
             self._apply_hole_preset()
         self.status.set('Selecciona o arrastra un objeto.' if self.mode.get() == 'select' else
@@ -378,8 +414,9 @@ class PanelWorkspace:
             return
         try:
             obj = Element(self.mode.get(), x, y, number(self.size.get(), 0.1, 200), self.text.get(),
-                          self._hole_type() if self.mode.get() == 'hole' else '', font=self._font_key())
-            if obj.kind=='text':text_mask(obj.text,obj.size,obj.font)
+                          self._hole_type() if self.mode.get() == 'hole' else '',
+                          **(self._text_style() if self.mode.get()=='text' else {}))
+            if obj.kind=='text':element_mask(obj)
             self.remember()
             self.document.elements.append(obj)
             self.dirty = True
@@ -400,8 +437,9 @@ class PanelWorkspace:
         try:
             old = self.document.elements[self.selected]
             new = replace(old, x=number(self.x.get()), y=number(self.y.get()),
-                          size=number(self.size.get(), 0.1, 200), text=self.text.get(), font=self._font_key())
-            if new.kind=='text':text_mask(new.text,new.size,new.font)
+                          size=number(self.size.get(), 0.1, 200), text=self.text.get(),
+                          **(self._text_style() if old.kind=='text' else {}))
+            if new.kind=='text':element_mask(new)
             if new.source_ref:
                 new.board_x, new.board_y = new.x-self.document.pcb_dx, new.y-self.document.pcb_dy
             self.remember()
@@ -424,6 +462,10 @@ class PanelWorkspace:
             self.size.set(f'{obj.size:g}')
             self.text.set(obj.text)
             self.font_choice.set(FONTS[obj.font][0])
+            self.text_angle.set(f'{obj.angle:g}');self.text_width.set(f'{obj.width_scale*100:g}')
+            self.text_tracking.set(f'{obj.tracking:g}');self.text_lines.set(f'{obj.line_spacing:g}')
+            self.text_gain.set(f'{obj.ink_gain:g}')
+            self.text_align.set({'left':'Izquierda','center':'Centrado','right':'Derecha'}[obj.align])
             if obj.kind == 'hole':
                 kind = 'rack' if obj.is_rack_mount else obj.hole_type or 'custom'
                 self.hole_preset.set(HOLE_PRESETS[kind][0])
@@ -643,7 +685,7 @@ class PanelWorkspace:
                 c.create_line(x, y-4, x, y+4, fill='#9db4c3', tags=(tag,))
             else:
                 try:
-                    mask=text_mask(obj.text,obj.size,obj.font)
+                    mask=element_mask(obj)
                     image=Image.new('RGBA',mask.size,color);image.putalpha(mask)
                     image=image.resize((max(1,round(mask.width*PIXEL_MM*scale)),max(1,round(mask.height*PIXEL_MM*scale))),Image.Resampling.LANCZOS)
                     photo=ImageTk.PhotoImage(image,master=self);self._text_images.append(photo)
@@ -715,6 +757,31 @@ class PanelWorkspace:
 
     def _font_key(self):
         return next((k for k,v in FONTS.items() if v[0]==self.font_choice.get()),'sans')
+
+    def _text_style(self):
+        return dict(font=self._font_key(),angle=number(self.text_angle.get()),
+                    width_scale=number(self.text_width.get(),25,400)/100,
+                    tracking=number(self.text_tracking.get(),0,3),line_spacing=number(self.text_lines.get(),.6,3),
+                    ink_gain=number(self.text_gain.get(),0,.3),
+                    align={'Izquierda':'left','Centrado':'center','Derecha':'right'}[self.text_align.get()])
+
+    def style_all_texts(self):
+        try:
+            style=self._text_style();size=number(self.size.get(),.1,200)
+            updated=[replace(e,**style,size=size) if e.kind=='text' else e for e in self.document.elements]
+            for e in updated:
+                if e.kind=='text':element_mask(e)
+            if not any(e.kind=='text' for e in updated):return
+            self.remember();self.document.elements=updated;self.changed()
+            self.status.set('Estilo aplicado a todos los textos. Se conservan contenido, posiciones y vínculos. Deshacer recupera el estilo anterior.')
+        except (ValueError,KeyError) as error:messagebox.showerror('Estilo de texto',str(error),parent=self)
+
+    def duplicate_selected(self):
+        if self.selected is None:return
+        old=self.document.elements[self.selected]
+        # A duplicate is independent; only the original keeps its automatic link.
+        new=replace(old,x=old.x+2,y=old.y-2,source_ref='',source_footprint='',board_x=None,board_y=None)
+        self.remember();self.document.elements.append(new);self.dirty=True;self.select(len(self.document.elements)-1)
 
     def export_gerber(self):
         from panel_gerber import export_panel
