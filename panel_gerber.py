@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import tempfile
 import zipfile
-from panel_fonts import ink_runs, font_path, PIXEL_MM, text_mask
+from panel_fonts import ink_runs, font_path, PIXEL_MM, element_mask,text_mask
 
 HEIGHT=128.5
 
@@ -32,11 +32,15 @@ def package_files(document, copper=True):
             raise ValueError(f'Agujero {i+1}: diámetro menor de 0,5 mm o demasiado cerca del borde.')
         if any(math.hypot(h.x-o.x,h.y-o.y)<(h.size+o.size)/2+.2 for o in holes[:i]):
             raise ValueError(f'Agujero {i+1}: se solapa o deja menos de 0,2 mm de material.')
-    rects=[];fonts={}
+    rects=[];fonts={};text_styles=[]
     for e in document.elements:
         if e.kind!='text':continue
-        mask=text_mask(e.text,e.size,e.font)
-        if mask.height*PIXEL_MM<1:raise ValueError(f'{e.text}: la altura impresa es menor de 1 mm. Aumenta el tamaño.')
+        mask=element_mask(e)
+        if any(text_mask(line,e.size,e.font,0,e.width_scale,e.tracking,e.line_spacing,e.align,e.ink_gain).height*PIXEL_MM<1
+               for line in e.text.split('\n') if line.strip()):
+            raise ValueError(f'{e.text}: la altura de los caracteres es menor de 1 mm. Aumenta el tamaño.')
+        text_styles.append(dict(font=e.font,angle=e.angle,width_scale=e.width_scale,tracking=e.tracking,
+                                line_spacing=e.line_spacing,align=e.align,ink_gain=e.ink_gain))
         fonts[e.font]=hashlib.sha256(font_path(e.font).read_bytes()).hexdigest()
         for box in ink_runs(e):
             x0,y0,x1,y1=box
@@ -75,7 +79,9 @@ def package_files(document, copper=True):
     svg+=['</svg>']
     return {k:v.encode('ascii') for k,v in files.items()},'\n'.join(svg),dict(width_mm=document.width,height_mm=HEIGHT,
         hole_count=len(holes),holes=[dict(x=h.x,y=h.y,diameter=h.size,plated=False) for h in holes],
-        fonts_sha256=fonts,ink_pixel_mm=PIXEL_MM,ink_expansion_mm=.075,copper_fill=copper)
+        fonts_sha256=fonts,text_count=len(text_styles),text_styles=text_styles,ink_pixel_mm=PIXEL_MM,
+        ink_expansion_mm=next(iter({s['ink_gain'] for s in text_styles})) if len({s['ink_gain'] for s in text_styles})==1 else None,
+        copper_fill=copper)
 
 
 def export_panel(document, destination, name='panel', copper=True):
