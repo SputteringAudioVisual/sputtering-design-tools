@@ -78,6 +78,16 @@ Los agujeros generados conservan la referencia del componente y siguen a la PCB 
 
 La importación comprueba la coincidencia de límites de contorno y, si hay Excellon cargado, contrasta los pines THT con los taladros para detectar una versión desalineada. Actualmente la extracción de contorno desde Allegro admite líneas y rectángulos en `BOARD GEOMETRY/DESIGN_OUTLINE` u `OUTLINE`; se rechazan otros contornos. Esto no lee cambios de Allegro que aún no estén guardados. El lector utiliza los campos documentados de las vistas COMPONENT, COMPOSITE_PAD y FULL_GEOMETRY de la instalación Cadence.
 
+### Reutilizar la herramienta en otros módulos
+
+**Herramientas → Nuevo módulo / frontal** inicia un documento sin capas, agujeros, textos ni referencias de componentes del anterior, y ofrece guardar los cambios pendientes. Carga los Gerber/drills del módulo nuevo y lee su `.brd` guardado. Las coordenadas no dependen de un nombre de proyecto ni de una ruta de fabricación. Se comprueban el contorno y los pines contra los taladros cargados; una versión desalineada se rechaza.
+
+En el importador, **Compatibilidad de la PCB…** muestra todas las huellas, cantidades, anclajes disponibles y motivos de exclusión. Se reconocen RK09 normal/invertido, doble, variantes con anclajes MH1/MH2, PJ301M y los interruptores configurados. El centro siempre procede de anclajes explícitos; no se supone que el origen del símbolo sea el eje. `BOTH` permite una regla para ambas caras, usando los pines absolutos de Cadence, que ya incluyen giro y espejo.
+
+Las reglas nuevas de mini-SPDT, DPDT y variantes de interruptor quedan desmarcadas para revisar diámetro/anclaje; **Marcar todos válidos** no las confirma. Una selección individual es explícita; guardar una regla revisada la configura para futuras propuestas. Los LED y pulsadores muestran una sugerencia de centro entre pines, pero requieren definir el diámetro o corte: no se genera un agujero por el nombre del componente. La herramienta coloca agujeros circulares; los recortes de otras formas necesitan un flujo de edición adicional.
+
+**Usar esta biblioteca en todos los módulos** guarda las reglas en `%LOCALAPPDATA%/SputteringDesignTools/footprint-hole-rules.json`. Los módulos nuevos reutilizan esa biblioteca. Las reglas guardadas dentro de un proyecto tienen prioridad, para conservar sus personalizaciones. La biblioteca se puede exportar/importar como JSON; no requiere la ruta de la biblioteca Allegro original. Las huellas nuevas que aún no tengan regla se muestran como pendientes. La lectura `.brd` sigue necesitando Extracta y un contorno formado por líneas/rectángulos; no es una promesa de compatibilidad con cualquier formato o huella sin revisar.
+
 ### Importar etiquetas desde la PCB
 
 En **2 · PCB de referencia**, **Importar textos desde .brd…** propone los refdes de los componentes con una regla de agujero. Utiliza la referencia de componentes guardada en el proyecto o permite leer un `.brd` / JSON actualizado. No importa todos los textos de serigrafía ni añade referencias de resistencias sin agujero.
@@ -93,6 +103,14 @@ Elige altura de texto, separación respecto al borde del agujero y posición **E
 El perfil es FR4 de dos capas con tinta en la cara superior. Las máscaras cerradas dejan cubierto el cobre. La opción **Relleno de cobre bajo la máscara** genera planos separados 0,3 mm del borde y de los agujeros; puede desactivarse para exportar sin cobre. Al pedir, selecciona máscara negra y serigrafía blanca para el acabado usado en la previsualización. El espesor, cantidad y resto de opciones se eligen en JLCPCB; el Gerber no establece colores ni espesor.
 
 La exportación impide agujeros solapados/fuera del panel, menos de 0,2 mm de material entre taladros, tinta fuera del frontal y tinta a menos de 0,15 mm de un agujero. La altura impresa del texto debe alcanzar 1 mm. Los círculos de 8,128 mm se mantienen en Excellon: [JLCPCB indica que los agujeros desde 6,3 mm se fresan mediante CNC](https://jlcpcb.com/capabilities/pcb-capabilities/). Se utilizan [nombres de capas reconocibles y coordenadas absolutas en milímetros](https://jlcpcb.com/help/article/gerber-files-preparation). Revisar siempre contorno, taladros y texto en el visor CAM de la orden antes de confirmarla.
+
+### Edición avanzada de textos
+
+El campo de texto permite hasta ocho líneas. Cada objeto guarda giro en grados, ancho entre 25–400 %, separación entre letras, interlineado, alineación izquierda/centro/derecha y engrosado de tinta por lado. **Aplicar al objeto seleccionado** confirma los ajustes. **Aplicar estilo a todos los textos** cambia tamaño/estilo sin alterar contenido, posiciones, agujeros ni vínculos a la PCB, con una sola acción de deshacer. **Duplicar objeto seleccionado** crea una copia editable independiente del vínculo automático del original.
+
+La importación de refdes permite **Encima/Debajo/Izquierda/Derecha**, separación desde el borde real del agujero, desplazamientos X/Y, prefijo y sufijo, y quitar los números finales. Los centros de los componentes siguen identificados por su refdes original aunque la etiqueta visible se abrevie. Las etiquetas existentes conservan sus ediciones al repetir la importación. El ancho y alto para la colocación se calculan con la fuente real.
+
+El giro, ancho y espaciados se comparten entre pantalla, vista de fabricación y Gerber. El informe de exportación incluye los estilos realmente utilizados. El engrosado inicial sigue siendo 0,075 mm por lado; reducirlo puede producir detalles demasiado finos para serigrafía. El SVG editable mantiene texto y transformaciones; la vista de fabricación conserva la geometría exacta de tinta.
 
 ### Tipografías
 
