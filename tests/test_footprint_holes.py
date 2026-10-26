@@ -221,19 +221,21 @@ class RefdesLabelTests(unittest.TestCase):
         return d
 
     def test_only_components_with_registered_holes_get_labels(self):
+        from panel_fonts import element_mask,PIXEL_MM
         d=self.document();labels,_=d.refdes_labels(sample(),DEFAULT_RULES)
         self.assertEqual([e.text for e in labels],['P1','J1','S1'])
         pot=labels[0]
         self.assertEqual(pot.x,2.5+d.pcb_dx)
-        self.assertAlmostEqual(pot.y,7+d.pcb_dy+8.128/2+1+1.25)
+        self.assertAlmostEqual(pot.y,7+d.pcb_dy+8.128/2+1+element_mask(pot).height*PIXEL_MM/2)
         below,_=d.refdes_labels(sample(),DEFAULT_RULES,size=3,gap=2,position='below')
-        self.assertAlmostEqual(below[0].y,7+d.pcb_dy-8.128/2-2-1.5)
+        self.assertAlmostEqual(below[0].y,7+d.pcb_dy-8.128/2-2-element_mask(below[0]).height*PIXEL_MM/2)
 
     def test_label_uses_actual_moved_hole_and_its_edited_diameter(self):
+        from panel_fonts import element_mask,PIXEL_MM
         d=self.document();d.apply_footprint_holes(sample(),DEFAULT_RULES,['P1'])
         h=d.elements[0];h.x+=2;h.y+=3;h.size=8
         labels,_=d.refdes_labels(sample(),DEFAULT_RULES)
-        self.assertEqual((labels[0].x,labels[0].y),(h.x,h.y+4+1+1.25))
+        self.assertEqual((labels[0].x,labels[0].y),(h.x,h.y+4+1+element_mask(labels[0]).height*PIXEL_MM/2))
 
     def test_repeat_preserves_edited_labels_and_hole_regeneration_keeps_text(self):
         d=self.document();d.apply_refdes_labels(sample(),DEFAULT_RULES,['P1','J1'])
@@ -259,7 +261,7 @@ class RefdesLabelTests(unittest.TestCase):
 
     def test_invalid_label_import_is_atomic(self):
         d=self.document();before=d.to_dict()
-        for options in [dict(size=0),dict(position='left'),dict(gap=-1),dict(gap=50)]:
+        for options in [dict(size=0),dict(position='diagonal'),dict(gap=-1),dict(gap=50)]:
             with self.assertRaises(ValueError):d.apply_refdes_labels(sample(),DEFAULT_RULES,['S1'],**options)
             self.assertEqual(d.to_dict(),before)
         with self.assertRaises(ValueError):d.apply_refdes_labels(sample(),DEFAULT_RULES,['R1'])
