@@ -76,7 +76,7 @@ class PanelManufacturingTests(unittest.TestCase):
             self.assertIn(b'G36*',files['panel.GTO'])
             masks.append(text_mask('AOB8',4,style).tobytes())
             self.assertIn('font-family=',restored.svg())
-        self.assertEqual(len(set(masks)),4)
+        self.assertEqual(len(set(masks)),len(FONTS))
 
     def test_zip_numbering_integrity_and_manifest(self):
         with tempfile.TemporaryDirectory() as folder:
