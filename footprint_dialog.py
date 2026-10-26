@@ -9,13 +9,14 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from footprint_holes import DEFAULT_RULES, read_pcb, proposals, validate_rules
+from footprint_holes import read_pcb, proposals, validate_rules, library_rules, save_shared_library, library_coverage, ANCHOR_HINTS
 from panel_model import HOLE_PRESETS, HEIGHT_MM, atomic_write
-from panel_fonts import FONTS, text_mask, PIXEL_MM
+from panel_fonts import FONTS, element_mask, PIXEL_MM
 from PIL import Image, ImageTk
 
 ANCHOR_LABELS = {'mechanical_pair': 'Centro entre 2 anclajes mecánicos',
                  'padstack': 'Centro del padstack indicado', 'pin': 'Centro del pin indicado',
+                 'pin_pair': 'Punto medio entre 2 pines (ej. 2,5)',
                  'origin': 'Origen del footprint'}
 
 
@@ -30,7 +31,9 @@ class FootprintDialog(tk.Toplevel):
         self.configure(bg='#252535')
         self.transient(owner)
         self.data = copy.deepcopy(owner.document.component_data)
-        self.rules = copy.deepcopy(DEFAULT_RULES)
+        try:self.rules=library_rules()
+        except (OSError,ValueError,KeyError,TypeError) as error:
+            self.rules={};messagebox.showerror('Biblioteca común',str(error)+'\nImporta una biblioteca válida o configura las reglas.',parent=self)
         self.rules.update(copy.deepcopy(owner.document.footprint_rules))
         self.items, self.checked = {}, set()
         self.closed, self.busy, self.poll_id = False, False, None
@@ -41,11 +44,15 @@ class FootprintDialog(tk.Toplevel):
         self.text_gap = tk.StringVar(value='1.0')
         self.text_position = tk.StringVar(value='Encima')
         self.text_font = tk.StringVar(value=FONTS['sans'][0])
+        self.text_prefix=tk.StringVar();self.text_suffix=tk.StringVar()
+        self.remove_numbers=tk.BooleanVar(value=False)
+        self.label_dx=tk.StringVar(value='0');self.label_dy=tk.StringVar(value='0')
         self.preview_images=[]
         top=ttk.Frame(self,padding=10);top.pack(fill='x')
         self.read_button=ttk.Button(top,text='Leer PCB / referencia…',command=self.choose_source)
         self.read_button.pack(side='left')
-        ttk.Label(top,textvariable=self.status,wraplength=810).pack(side='left',padx=10)
+        ttk.Button(top,text='Compatibilidad de la PCB…',command=self.show_coverage).pack(side='left',padx=5)
+        ttk.Label(top,textvariable=self.status,wraplength=630).pack(side='left',padx=10)
         ttk.Label(self,text=('Importa el refdes de los componentes con agujero como texto editable. Las etiquetas existentes se conservan.' if mode == 'texts' else
                   'Revisa los centros y diámetros. Doble clic o Espacio marca/desmarca. Los círculos violetas son una previsualización.'),
                   wraplength=1050).pack(anchor='w',padx=12,pady=5)
@@ -54,12 +61,16 @@ class FootprintDialog(tk.Toplevel):
             for label,var in [('Altura de texto (mm)',self.text_size),('Separación del borde del agujero (mm)',self.text_gap)]:
                 ttk.Label(options,text=label).pack(side='left',padx=4)
                 ttk.Entry(options,textvariable=var,width=7).pack(side='left',padx=4)
-            ttk.Combobox(options,textvariable=self.text_position,state='readonly',values=['Encima','Debajo'],width=9).pack(side='left',padx=4)
+            ttk.Combobox(options,textvariable=self.text_position,state='readonly',values=['Encima','Debajo','Izquierda','Derecha'],width=10).pack(side='left',padx=4)
             ttk.Button(options,text='Actualizar previsualización',command=self.refresh).pack(side='left',padx=4)
             fontrow=ttk.Frame(self,padding=(10,0));fontrow.pack(fill='x')
             ttk.Label(fontrow,text='Tipografía:').pack(side='left',padx=4)
             ttk.Combobox(fontrow,textvariable=self.text_font,state='readonly',width=30,
                          values=[v[0] for v in FONTS.values()]).pack(side='left',padx=4)
+            for label,var in [('Prefijo',self.text_prefix),('Sufijo',self.text_suffix),('ΔX mm',self.label_dx),('ΔY mm',self.label_dy)]:
+                ttk.Label(fontrow,text=label).pack(side='left',padx=3)
+                ttk.Entry(fontrow,textvariable=var,width=7).pack(side='left',padx=3)
+            ttk.Checkbutton(self,text='Quitar números finales del refdes en la etiqueta',variable=self.remove_numbers).pack(anchor='w',padx=14)
         frame=ttk.Frame(self,padding=(10,0));frame.pack(fill='both',expand=True)
         columns=('use','ref','footprint','kind','x','y','diameter','action')
         self.table=ttk.Treeview(frame,columns=columns,show='headings',height=14,selectmode='browse')
@@ -79,11 +90,11 @@ class FootprintDialog(tk.Toplevel):
         self.rule_combo.grid(row=0,column=0,sticky='ew',padx=3)
         self.rule_combo.bind('<<ComboboxSelected>>',self.load_rule)
         self.kind_combo=ttk.Combobox(rule,textvariable=self.kind,state='readonly',width=18,
-            values=[HOLE_PRESETS[k][2] for k in ('potentiometer','jack','spdt','custom')])
+            values=[HOLE_PRESETS[k][2] for k in ('potentiometer','jack','spdt','dpdt','custom')])
         self.kind_combo.grid(row=0,column=1,padx=3)
         ttk.Label(rule,text='Ø mm').grid(row=0,column=2)
         ttk.Entry(rule,textvariable=self.diameter,width=7).grid(row=0,column=3,padx=3)
-        ttk.Combobox(rule,textvariable=self.side,state='readonly',values=['TOP','BOTTOM'],width=9).grid(row=0,column=4,padx=3)
+        ttk.Combobox(rule,textvariable=self.side,state='readonly',values=['TOP','BOTTOM','BOTH'],width=9).grid(row=0,column=4,padx=3)
         ttk.Combobox(rule,textvariable=self.anchor,state='readonly',values=list(ANCHOR_LABELS.values()),width=35).grid(row=1,column=0,columnspan=2,sticky='ew',padx=3,pady=5)
         ttk.Label(rule,text='Pin / padstack').grid(row=1,column=2,columnspan=2)
         ttk.Entry(rule,textvariable=self.value,width=22).grid(row=1,column=4,padx=3)
@@ -92,6 +103,7 @@ class FootprintDialog(tk.Toplevel):
                   wraplength=1000).grid(row=2,column=0,columnspan=6,sticky='w')
         ttk.Button(rule,text='Importar biblioteca de reglas…',command=self.import_rules).grid(row=3,column=0,columnspan=2,sticky='w',pady=5)
         ttk.Button(rule,text='Exportar biblioteca de reglas…',command=self.export_rules).grid(row=3,column=4,columnspan=2,sticky='e',pady=5)
+        ttk.Button(rule,text='Usar esta biblioteca en todos los módulos',command=self.share_rules).grid(row=4,column=0,columnspan=6,sticky='w',pady=5)
         if mode == 'texts':rule.pack_forget()
         bottom=ttk.Frame(self,padding=10);bottom.pack(fill='x')
         ttk.Button(bottom,text='Marcar todos válidos',command=lambda:self.mark_all(True)).pack(side='left',padx=3)
@@ -169,42 +181,50 @@ class FootprintDialog(tk.Toplevel):
                         for e in d.elements)
             action=('Fuera del frontal' if outside else 'Manual existente: conservar' if manual and item['refdes'] not in owned
                     else 'Solapa agujero manual: revisar' if overlap
+                    else 'Revisar diámetro/anclaje' if item.get('review_required') and item['refdes'] not in owned
                     else 'Actualizar' if item['refdes'] in owned else 'Añadir')
             valid=not outside and not overlap
             ref=item['refdes'];self.items[ref]=(item,valid,action)
-            if valid:self.checked.add(ref)
-            self.table.insert('','end',iid=ref,values=('✓' if valid else '',ref,item['footprint'],
+            if valid and (not item.get('review_required') or ref in owned):self.checked.add(ref)
+            self.table.insert('','end',iid=ref,values=('✓' if ref in self.checked else '',ref,item['footprint'],
                 HOLE_PRESETS[item['hole_type']][2],f'{x:.3f}',f'{y:.3f}',f"{item['diameter_mm']:g}",action))
         counts=Counter(c['hole_type'] for c in candidates)
+        unknown=sum(r['count'] for r in library_coverage(self.data,self.rules) if not r['ready'])
         self.status.set(f"{self.data.get('board_name','PCB')}: {len(candidates)} centros · "
-            f"{counts['potentiometer']} potenciómetros, {counts['jack']} jacks, {counts['spdt']} SPDT. "
-            f"{len(self.data.get('unplaced',[]))} componentes sin colocar; {len(skipped)} omitidos por anclaje/cara. "
-            f"{len(self.checked)} seleccionados válidos. "
+            +', '.join(f'{count} {HOLE_PRESETS[kind][2]}' for kind,count in counts.items())+'. '
+            +f"{len(self.data.get('unplaced',[]))} componentes sin colocar; {len(skipped)} omitidos por anclaje/cara. "
+            f"{len(self.checked)} seleccionados válidos; {unknown} componentes sin regla válida (ver compatibilidad). "
             + (' '.join(ref+': '+reason for ref,reason in skipped[:2])))
         self.update_checks()
 
     def text_options(self):
         from panel_model import number
         return dict(size=number(self.text_size.get(),.5,20),gap=number(self.text_gap.get(),0,50),
-                    position='above' if self.text_position.get()=='Encima' else 'below',
-                    font=next(k for k,v in FONTS.items() if v[0]==self.text_font.get()))
+                    position={'Encima':'above','Debajo':'below','Izquierda':'left','Derecha':'right'}[self.text_position.get()],
+                    font=next(k for k,v in FONTS.items() if v[0]==self.text_font.get()),
+                    prefix=self.text_prefix.get(),suffix=self.text_suffix.get(),remove_numbers=self.remove_numbers.get(),
+                    dx=number(self.label_dx.get(),-100,100),dy=number(self.label_dy.get(),-100,100))
 
     def add_text_row(self,item,label):
         d=self.owner.document
-        half_width=len(label.text)*label.size*.4
-        outside=not(half_width<=label.x<=d.width-half_width and label.size/2<=label.y<=HEIGHT_MM-label.size/2)
-        exists=any(e.kind=='text' and (e.source_ref==label.source_ref or
-                   (not e.source_ref and e.text.strip().casefold()==label.text.casefold())) for e in d.elements)
+        mask=element_mask(label);half_width=mask.width*PIXEL_MM/2;half_height=mask.height*PIXEL_MM/2
+        outside=not(half_width<=label.x<=d.width-half_width and half_height<=label.y<=HEIGHT_MM-half_height)
+        exists=d.has_refdes_label(label)
         valid=not outside and not exists
+        reviewed=not item.get('review_required') or any(e.kind=='hole' and e.source_ref==item['refdes'] for e in d.elements)
         ref=item['refdes']
-        self.items[ref]=(dict(item,label=label),valid,'Texto existente: conservar' if exists else 'Fuera del frontal' if outside else 'Añadir texto')
-        if valid:self.checked.add(ref)
+        self.items[ref]=(dict(item,label=label),valid,'Texto existente: conservar' if exists else 'Fuera del frontal' if outside
+                         else 'Revisar agujero/diámetro' if not reviewed else 'Añadir texto')
+        if valid and reviewed:self.checked.add(ref)
         self.table.insert('','end',iid=ref,values=('✓' if valid else '',ref,item['footprint'],'Etiqueta refdes',
             f'{label.x:.3f}',f'{label.y:.3f}',f'{label.size:g}',self.items[ref][2]))
 
     def load_rule(self,event=None):
         rule=self.rules.get(self.footprint.get(),dict(hole_type='custom',diameter_mm=6.5,anchor='origin',value='',side='TOP'))
+        if self.footprint.get() not in self.rules and self.footprint.get() in ANCHOR_HINTS:
+            rule=dict(rule,**ANCHOR_HINTS[self.footprint.get()],diameter_mm=0)
         self.kind.set(HOLE_PRESETS[rule['hole_type']][2]);self.diameter.set(f"{rule['diameter_mm']:g}")
+        if rule['diameter_mm']==0:self.diameter.set('')
         self.anchor.set(ANCHOR_LABELS[rule['anchor']]);self.value.set(rule['value']);self.side.set(rule['side'])
 
     def save_rule(self):
@@ -235,6 +255,27 @@ class FootprintDialog(tk.Toplevel):
             try:atomic_write(path,json.dumps(dict(schema='sputtering.footprint-hole-rules.v1',rules=validate_rules(self.rules)),ensure_ascii=False,indent=2))
             except (OSError,ValueError) as error:messagebox.showerror('Biblioteca de agujeros',str(error),parent=self)
 
+    def share_rules(self):
+        try:
+            save_shared_library(self.rules)
+            self.status.set('Biblioteca común guardada. Los nuevos módulos la usarán; las reglas guardadas en cada proyecto tienen prioridad.')
+        except (OSError,ValueError) as error:messagebox.showerror('Biblioteca común',str(error),parent=self)
+
+    def show_coverage(self):
+        if self.data is None:
+            self.status.set('Lee primero una PCB para comprobar su biblioteca.');return
+        win=tk.Toplevel(self);win.title('Compatibilidad de la biblioteca');win.geometry('860x430');win.transient(self)
+        columns=('footprint','count','ready','state')
+        table=ttk.Treeview(win,columns=columns,show='headings')
+        for key,label,width in zip(columns,['Footprint','Cantidad','Con anclaje','Estado'],[260,70,90,410]):
+            table.heading(key,text=label);table.column(key,width=width)
+        table.pack(fill='both',expand=True,padx=10,pady=10)
+        for row in library_coverage(self.data,self.rules):
+            state='; '.join(sorted(set(row['problems']))) if row['problems'] else 'Revisar diámetro antes de seleccionar' if row['review'] else 'Regla disponible'
+            table.insert('','end',values=(row['footprint'],row['count'],row['ready'],state))
+        ttk.Label(win,text='Sin regla no se inventa ningún agujero. Configura los controles que lo necesiten; resistencias e integrados no suelen necesitar corte.',wraplength=820).pack(padx=10,pady=5)
+        ttk.Button(win,text='Cerrar',command=win.destroy).pack(pady=5)
+
     def select_row(self,event=None):
         selection=self.table.selection()
         if selection:
@@ -251,7 +292,7 @@ class FootprintDialog(tk.Toplevel):
         return 'break'
 
     def mark_all(self,checked):
-        self.checked={ref for ref,(_,valid,_) in self.items.items() if valid} if checked else set()
+        self.checked={ref for ref,(item,valid,_) in self.items.items() if valid and not item.get('review_required')} if checked else set()
         self.update_checks()
 
     def update_checks(self):
@@ -264,7 +305,7 @@ class FootprintDialog(tk.Toplevel):
             p=self.items[ref][0]
             if self.mode == 'texts':
                 label=p['label'];x,y=self.owner.to_canvas(label.x,label.y)
-                mask=text_mask(label.text,label.size,label.font)
+                mask=element_mask(label)
                 image=Image.new('RGBA',mask.size,'#b050e0');image.putalpha(mask)
                 image=image.resize((max(1,round(mask.width*PIXEL_MM*scale)),max(1,round(mask.height*PIXEL_MM*scale))),Image.Resampling.LANCZOS)
                 photo=ImageTk.PhotoImage(image,master=self);self.preview_images.append(photo)
