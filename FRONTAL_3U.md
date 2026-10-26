@@ -86,11 +86,25 @@ Elige altura de texto, separación respecto al borde del agujero y posición **E
 
 **Herramientas → Vaciar agujeros y textos (conservar PCB)** permite empezar el frontal desde cero manteniendo ancho, referencias y biblioteca; se puede deshacer. Los objetos vuelven al reabrir únicamente si forman parte del proyecto guardado: no son archivos temporales. Las lecturas `.brd` utilizan una carpeta temporal independiente que se elimina al finalizar.
 
+### Exportar el frontal como PCB para JLCPCB
+
+**Gerber / ZIP…** exporta el estado abierto del frontal, incluidos cambios aún sin guardar. Crea un ZIP numerado con `panel.GKO` (contorno físico), `panel-NPTH.drl` (todos los agujeros sin metalizar), `GTO/GBO` (serigrafías), `GTL/GBL` (cobre) y `GTS/GBS` (máscaras). No copia las capas de la PCB de referencia. El ZIP contiene solo archivos de fabricación; junto a él se guardan una vista SVG con geometría fija y un informe JSON con medidas, taladros y SHA-256. No se sobrescriben exportaciones anteriores.
+
+El perfil es FR4 de dos capas con tinta en la cara superior. Las máscaras cerradas dejan cubierto el cobre. La opción **Relleno de cobre bajo la máscara** genera planos separados 0,3 mm del borde y de los agujeros; puede desactivarse para exportar sin cobre. Al pedir, selecciona máscara negra y serigrafía blanca para el acabado usado en la previsualización. El espesor, cantidad y resto de opciones se eligen en JLCPCB; el Gerber no establece colores ni espesor.
+
+La exportación impide agujeros solapados/fuera del panel, menos de 0,2 mm de material entre taladros, tinta fuera del frontal y tinta a menos de 0,15 mm de un agujero. La altura impresa del texto debe alcanzar 1 mm. Los círculos de 8,128 mm se mantienen en Excellon: [JLCPCB indica que los agujeros desde 6,3 mm se fresan mediante CNC](https://jlcpcb.com/capabilities/pcb-capabilities/). Se utilizan [nombres de capas reconocibles y coordenadas absolutas en milímetros](https://jlcpcb.com/help/article/gerber-files-preparation). Revisar siempre contorno, taladros y texto en el visor CAM de la orden antes de confirmarla.
+
+### Tipografías
+
+Se añaden **Consola · Consolas**, **Gótica · Old English** e **Industrial · Bahnschrift**, además de Arial. La fuente se elige al colocar textos, al editar un texto seleccionado (**Aplicar al objeto seleccionado**) y al importar refdes. Se guarda con cada elemento. Se necesitan las fuentes instaladas; si falta una, se avisa en lugar de sustituirla silenciosamente al exportar.
+
+La vista del frontal, la vista SVG de fabricación y el Gerber usan la misma máscara de tinta a 0,025 mm. Los contornos de los caracteres se convierten en regiones Gerber rellenas; los huecos de las letras se conservan. Se engrosan 0,075 mm por lado para proteger trazos finos. No se envían archivos de fuentes al fabricante. Para la gótica conviene usar texto mayor y revisar sus huecos. El SVG editable continúa disponible por separado y depende de las fuentes del equipo donde se abra.
+
 ### Alcance de esta primera versión
 
 El SVG es un plano vectorial para continuar el diseño: los círculos representan cortes/agujeros, no taladros Excellon. Los textos permanecen editables y dependen de la fuente Arial/sans-serif; antes de fabricar, conviértelos a trazados en tu editor vectorial y comprueba medidas y encaje mecánico. La aplicación no comprueba distancias de tuercas, cuerpos de potenciómetros, componentes ni profundidad detrás del panel. Avisa de agujeros que se solapan o salen del borde; el aviso de posición del texto corresponde a su centro, no a toda su extensión tipográfica.
 
-La referencia admite Gerber absoluto con supresión de ceros iniciales, aperturas C/R/O, líneas, arcos multicuadrante aproximados y regiones simples. Se admiten las declaraciones de transformación identidad de Allegro; se rechazan macros, transformaciones no soportadas, regiones de varios contornos y otros formatos de coordenadas. No se exportan los Gerber cargados desde este espacio de trabajo. La revisión de polaridades complejas y la validación del encaje mecánico corresponden a cada diseño.
+La referencia admite Gerber absoluto con supresión de ceros iniciales, aperturas C/R/O, líneas, arcos multicuadrante aproximados y regiones simples. Se admiten las declaraciones de transformación identidad de Allegro; se rechazan macros, transformaciones no soportadas, regiones de varios contornos y otros formatos de coordenadas. Las capas de referencia no se copian al paquete del frontal. La revisión de polaridades complejas y la validación del encaje mecánico corresponden a cada diseño.
 
 ### Comprobaciones
 
