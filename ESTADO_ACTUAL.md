@@ -1,6 +1,16 @@
-# Estado de la aplicación — 23 de octubre de 2026
+# Estado de la aplicación — 26 de octubre de 2026
 
-Estado: versión comprobada en uso por Luis. Desarrollo cerrado por ahora; se retomará cuando aparezca un fallo concreto. No se inicia una nueva ronda de rediseño ni de funciones.
+El flujo original de serigrafía mantiene su validación. El frontal continúa su desarrollo con exportación de fabricación, edición de textos y biblioteca reutilizable entre módulos.
+
+## Textos y reutilización entre módulos — 26 de octubre de 2026
+
+Validación actual: **93 pruebas locales**; las comprobaciones posteriores del preajuste DPDT y del inicio de módulos nuevos también pasan.
+
+Se añaden texto multilínea, giro, ancho, espaciado, interlineado, alineación, engrosado, estilo en lote y duplicado independiente. Las etiquetas importadas admiten cuatro lados, desplazamientos, prefijo/sufijo y eliminación de números finales, manteniendo el refdes de origen. Se actualiza el informe de fabricación para registrar los estilos exactos y validar la altura de caracteres sin confundirla con la altura de un bloque girado.
+
+La biblioteca incluye variantes verificadas de RK09 y anclajes de interruptores, reglas por ambas caras, cobertura explícita de huellas y una biblioteca común reutilizable. Los interruptores nuevos cuyo diámetro requiere revisión no se seleccionan automáticamente. Las huellas sin regla no producen agujeros. **Nuevo módulo / frontal** elimina el estado del módulo anterior al iniciar otro documento.
+
+La comprobación local abarca cuatro módulos distintos con sus Gerber y taladros reales: contornos y pines coinciden en los cuatro. La geometría de cuatro estilos de texto transformado también se contrastó con Gerbonara, con 13.130 comprobaciones de píxel. Los datos reales se conservan en el proyecto local y no se publican en el repositorio de la herramienta. La compatibilidad sigue dependiendo de una regla válida, el formato soportado y las versiones de PCB/Gerber alineadas.
 
 ## Fabricación del frontal y fuentes — 25 de octubre de 2026
 
