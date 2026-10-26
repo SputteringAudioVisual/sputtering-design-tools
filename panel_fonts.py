@@ -11,7 +11,16 @@ FONTS = {
     'console': ('Consola · Consolas', 'Consolas', 'consolab.ttf'),
     'gothic': ('Gótica · Old English', 'Old English Text MT', 'OLDENGL.TTF'),
     'industrial': ('Industrial · Bahnschrift', 'Bahnschrift', 'bahnschrift.ttf'),
+    'impact': ('Compacta · Impact', 'Impact', 'impact.ttf'),
+    'narrow': ('Estrecha · Arial Narrow', 'Arial Narrow', 'ARIALN.TTF'),
+    'stencil': ('Plantilla · Stencil', 'Stencil', 'STENCIL.TTF'),
+    'ocr': ('Retro digital · OCR A', 'OCR A Extended', 'OCRAEXT.TTF'),
+    'agency': ('Técnica · Agency FB', 'Agency FB', 'AGENCYR.TTF'),
+    'slab': ('Robusta · Rockwell', 'Rockwell', 'ROCK.TTF'),
+    'retro': ('Retro · Magneto', 'Magneto', 'MAGNETOB.TTF'),
+    'serif': ('Editorial · Georgia', 'Georgia', 'georgia.ttf'),
 }
+FONT_WEIGHTS={'console':'bold','retro':'bold'}
 
 
 def font_path(style):
