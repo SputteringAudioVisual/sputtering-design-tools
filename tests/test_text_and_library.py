@@ -155,4 +155,70 @@ class TextOptionsTests(unittest.TestCase):
         finally:app.destroy()
 
 
+class LabelReimportTests(unittest.TestCase):
+    def document(self):
+        d=PanelDocument(layers=[Reference('OUTLINE.art',BOARD)]);d.center_pcb()
+        d.apply_refdes_labels(sample(),DEFAULT_RULES,['P1','J1','S1'])
+        return d
+
+    def test_batch_font_change_keeps_edited_text_position_and_advanced_style(self):
+        d=self.document();label=d.elements[0]
+        label.text='CUSTOM\nGAIN';label.x+=2;label.board_x+=2;label.angle=15;label.tracking=.1
+        before=copy.deepcopy(d.elements)
+        manual=Element('text',10,110,3,'TITLE');d.elements.append(manual)
+        count,preserved,_=d.apply_refdes_labels(sample(),DEFAULT_RULES,['P1','J1','S1'],font='stencil',size=4,update_existing=True)
+        self.assertEqual(count,3);self.assertFalse(preserved);self.assertEqual(len(d.elements),4)
+        for old,new in zip(before,d.elements):
+            self.assertEqual((old.x,old.y,old.text,old.angle,old.tracking,old.board_x,old.board_y),
+                             (new.x,new.y,new.text,new.angle,new.tracking,new.board_x,new.board_y))
+            self.assertEqual((new.font,new.size),('stencil',4))
+        self.assertEqual(d.elements[-1],manual)
+        d.apply_refdes_labels(sample(),DEFAULT_RULES,['P1','J1','S1'],font='ocr',update_existing=True)
+        self.assertEqual(len(d.elements),4)
+        self.assertEqual(PanelDocument.from_dict(d.to_dict()).to_dict(),d.to_dict())
+        d.elements[0].size=3.4
+        d.apply_refdes_labels(sample(),DEFAULT_RULES,['P1','J1'],font='agency',size=6,update_existing=True,keep_size=True)
+        self.assertEqual([e.size for e in d.elements[:2]],[3.4,2.5])
+
+    def test_explicit_regeneration_changes_contents_and_repositions_relative_to_hole(self):
+        d=self.document();d.elements[0].text='RENAMED';d.elements[0].x+=3;d.elements[0].board_x+=3
+        original=copy.deepcopy(d.elements[0])
+        d.apply_refdes_labels(sample(),DEFAULT_RULES,['P1'],font='impact',prefix='CV ',position='right',
+                             update_existing=True,keep_positions=False,keep_text=False)
+        label=d.elements[0];self.assertEqual(label.text,'CV P1');self.assertEqual(label.font,'impact')
+        self.assertNotEqual((label.x,label.y),(original.x,original.y))
+        self.assertAlmostEqual(label.x,2.5+d.pcb_dx+8.128/2+1+element_mask(label).width*PIXEL_MM/2)
+        self.assertAlmostEqual(label.board_x,label.x-d.pcb_dx)
+
+    def test_invalid_or_ambiguous_reimport_is_atomic(self):
+        d=self.document();before=d.to_dict()
+        with self.assertRaises(ValueError):
+            d.apply_refdes_labels(sample(),DEFAULT_RULES,['P1','NO_SUCH_REF'],font='stencil',update_existing=True)
+        self.assertEqual(d.to_dict(),before)
+        d.elements.append(copy.deepcopy(d.elements[0]));before=d.to_dict()
+        with self.assertRaisesRegex(ValueError,'varias etiquetas'):
+            d.apply_refdes_labels(sample(),DEFAULT_RULES,['P1'],font='stencil',update_existing=True)
+        self.assertEqual(d.to_dict(),before)
+
+    def test_reimport_dialog_previews_updates_and_undo_recovers_all_labels(self):
+        from panel_editor import PanelEditor
+        from footprint_dialog import FootprintDialog
+        from panel_fonts import FONTS
+        app=PanelEditor();app.withdraw()
+        try:
+            app.document=self.document();app.refresh();before=app.document.to_dict()
+            dialog=FootprintDialog(app,mode='texts')
+            self.assertTrue(dialog.update_existing.get());self.assertEqual(dialog.checked,{'P1','J1','S1'})
+            dialog.text_font.set(FONTS['stencil'][0]);dialog.refresh()
+            self.assertEqual({item[0]['label'].font for item in dialog.items.values()},{'stencil'})
+            self.assertEqual({item[2] for item in dialog.items.values()},{'Actualizar estilo'})
+            dialog.update_existing.set(False);dialog.refresh();self.assertFalse(dialog.checked)
+            dialog.update_existing.set(True);dialog.refresh();dialog.apply()
+            self.assertEqual(len(app.document.elements),3)
+            self.assertTrue(all(e.font=='stencil' for e in app.document.elements))
+            app.undo();self.assertEqual(app.document.to_dict(),before)
+            app.redo();self.assertTrue(all(e.font=='stencil' for e in app.document.elements))
+        finally:app.destroy()
+
+
 if __name__=='__main__':unittest.main()
