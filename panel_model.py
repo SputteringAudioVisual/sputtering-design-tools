@@ -20,6 +20,7 @@ HOLE_PRESETS = {
     'potentiometer': ('Potenciómetro · Ø8,128 mm', 8.128, 'Potenciómetro'),
     'jack': ('Jack 3,5 mm · Ø6,1 mm', 6.1, 'Jack'),
     'spdt': ('SPDT mini · Ø6,5 mm', 6.5, 'SPDT'),
+    'dpdt': ('DPDT · Ø6,5 mm', 6.5, 'DPDT'),
     'rack': ('Tornillo de rack · Ø3,2 mm', 3.2, 'Tornillo rack'),
     'custom': ('Personalizado', None, 'Agujero'),
 }
@@ -197,6 +198,12 @@ class Element:
     board_x: float | None = None
     board_y: float | None = None
     font: str = 'sans'
+    angle: float = 0
+    width_scale: float = 1
+    tracking: float = 0
+    line_spacing: float = 1.2
+    align: str = 'center'
+    ink_gain: float = .075
 
     def __post_init__(self):
         if self.kind not in {'hole', 'text'}:
@@ -205,6 +212,12 @@ class Element:
         self.size = number(self.size, 0.1, 200)
         self.text = str(self.text)
         if self.font not in FONTS:raise ValueError('Tipografía no reconocida.')
+        self.angle=number(self.angle)%360
+        self.width_scale=number(self.width_scale,.25,4)
+        self.tracking=number(self.tracking,0,3)
+        self.line_spacing=number(self.line_spacing,.6,3)
+        self.ink_gain=number(self.ink_gain,0,.3)
+        if self.align not in {'left','center','right'}:raise ValueError('Alineación no reconocida.')
         if self.hole_type not in ('', *HOLE_PRESETS):
             raise ValueError('Tipo de agujero no reconocido.')
         if self.kind != 'hole' and self.hole_type:
@@ -317,12 +330,15 @@ class PanelDocument:
         self.component_data, self.footprint_rules = data, rules
         return len(updates), collisions, skipped
 
-    def refdes_labels(self, data, rules, size=2.5, gap=1.0, position='above', font='sans'):
+    def refdes_labels(self, data, rules, size=2.5, gap=1.0, position='above', font='sans',
+                     prefix='',suffix='',remove_numbers=False,dx=0,dy=0):
         """Propose labels for the same mechanically registered components as holes."""
         from footprint_holes import proposals
         size, gap = number(size, .5, 20), number(gap, 0, 50)
-        if position not in {'above', 'below'}:
-            raise ValueError('Elige encima o debajo del agujero.')
+        if position not in {'above', 'below','left','right'}:
+            raise ValueError('Elige encima, debajo, izquierda o derecha del agujero.')
+        from panel_fonts import element_mask,PIXEL_MM
+        dx,dy=number(dx,-100,100),number(dy,-100,100)
         drills = [(p['x'],p['y']) for r in self.layers if r.coord_format for p in r.layer.drawables]
         items, skipped = proposals(data, rules, self.reference_bounds(), drills)
         holes = {e.source_ref: e for e in self.elements if e.kind == 'hole' and e.source_ref}
@@ -332,16 +348,25 @@ class PanelDocument:
             x = hole.x if hole else item['x_mm']+self.pcb_dx
             cy = hole.y if hole else item['y_mm']+self.pcb_dy
             radius = (hole.size if hole else item['diameter_mm'])/2
-            y = cy+(radius+gap+size/2)*(1 if position == 'above' else -1)
-            result.append(Element('text', x, y, size, item['refdes'],
+            name=re.sub(r'\d+$','',item['refdes']) if remove_numbers else item['refdes']
+            text=str(prefix)+name+str(suffix)
+            label=Element('text', x, cy, size, text,
                                   source_ref=item['refdes'], source_footprint=item['footprint'],
-                                  board_x=x-self.pcb_dx, board_y=y-self.pcb_dy, font=font))
+                                  board_x=x-self.pcb_dx, board_y=cy-self.pcb_dy, font=font)
+            mask=element_mask(label)
+            if position in {'above','below'}:
+                label.y+=(radius+gap+mask.height*PIXEL_MM/2)*(1 if position=='above' else -1)
+            else:label.x+=(radius+gap+mask.width*PIXEL_MM/2)*(1 if position=='right' else -1)
+            label.x+=dx;label.y+=dy
+            label.board_x,label.board_y=label.x-self.pcb_dx,label.y-self.pcb_dy
+            result.append(label)
         return result, skipped
 
-    def apply_refdes_labels(self, data, rules, selected_refs, size=2.5, gap=1.0, position='above', font='sans'):
+    def apply_refdes_labels(self, data, rules, selected_refs, size=2.5, gap=1.0, position='above', font='sans',
+                            prefix='',suffix='',remove_numbers=False,dx=0,dy=0):
         from footprint_holes import validate_data, validate_rules
         data, rules = validate_data(data), validate_rules(rules)
-        labels, skipped = self.refdes_labels(data, rules, size, gap, position, font)
+        labels, skipped = self.refdes_labels(data, rules, size, gap, position, font,prefix,suffix,remove_numbers,dx,dy)
         selected = set(selected_refs)
         if not selected.issubset({e.source_ref for e in labels}):
             raise ValueError('Hay componentes seleccionados sin etiqueta válida.')
@@ -349,15 +374,12 @@ class PanelDocument:
         for label in labels:
             if label.source_ref not in selected:
                 continue
-            # Conservative width estimate matches centred Arial preview/export.
-            half_width = len(label.text)*label.size*.4
+            from panel_fonts import element_mask,PIXEL_MM
+            mask=element_mask(label);half_width=mask.width*PIXEL_MM/2;half_height=mask.height*PIXEL_MM/2
             if not (half_width <= label.x <= self.width-half_width and
-                    label.size/2 <= label.y <= HEIGHT_MM-label.size/2):
+                    half_height <= label.y <= HEIGHT_MM-half_height):
                 raise ValueError(f'{label.source_ref}: la etiqueta queda fuera del frontal.')
-            owned = [e for e in self.elements if e.kind == 'text' and e.source_ref == label.source_ref]
-            manual = [e for e in self.elements if e.kind == 'text' and not e.source_ref and
-                      e.text.strip().casefold() == label.text.casefold()]
-            if manual or owned:
+            if self.has_refdes_label(label):
                 # Keep hand-edited label text and offsets on repeated imports.
                 preserved.append(label.source_ref)
                 continue
@@ -365,6 +387,12 @@ class PanelDocument:
         self.elements.extend(updates)
         self.component_data, self.footprint_rules = data, rules
         return len(updates), preserved, skipped
+
+    def has_refdes_label(self,label):
+        return any(e.kind=='text' and (e.source_ref==label.source_ref or
+                   (not e.source_ref and (e.text.strip().casefold()==label.source_ref.casefold() or
+                    (e.text.strip().casefold()==label.text.casefold() and math.hypot(e.x-label.x,e.y-label.y)<1))))
+                   for e in self.elements)
 
     def mounting_holes(self):
         if self.hp < 4:
@@ -430,7 +458,17 @@ class PanelDocument:
                   'text-anchor="middle" dominant-baseline="central">']
         for element in self.elements:
             if element.kind == 'text':
-                lines.append(f'<text x="{element.x:g}" y="{HEIGHT_MM-element.y:g}" '
-                             f'font-family="{FONTS[element.font][1]}" font-weight="{"bold" if element.font=="console" else "normal"}" '
-                             f'font-size="{element.size:g}">{escape(element.text)}</text>')
+                from panel_fonts import text_mask, PIXEL_MM
+                rows=element.text.split('\n')
+                width=max(text_mask(row,element.size,element.font,tracking=element.tracking,ink_gain=0).width*PIXEL_MM
+                          for row in rows if row.strip())
+                anchor={'left':'start','center':'middle','right':'end'}[element.align]
+                x={'left':-width/2,'center':0,'right':width/2}[element.align]
+                lines.append(f'<g transform="translate({element.x:g},{HEIGHT_MM-element.y:g}) rotate({-element.angle:g}) scale({element.width_scale:g},1)">')
+                for row,text in enumerate(rows):
+                    y=(row-(len(rows)-1)/2)*element.size*element.line_spacing
+                    lines.append(f'<text x="{x:g}" y="{y:g}" text-anchor="{anchor}" '
+                                 f'font-family="{FONTS[element.font][1]}" font-weight="{"bold" if element.font=="console" else "normal"}" '
+                                 f'letter-spacing="{element.tracking:g}" font-size="{element.size:g}">{escape(text)}</text>')
+                lines.append('</g>')
         return '\n'.join(lines + ['</g>', '</svg>', ''])
