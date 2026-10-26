@@ -7,6 +7,8 @@ import subprocess
 import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+from PIL import Image, ImageTk
+from panel_fonts import FONTS, text_mask, PIXEL_MM
 
 from panel_model import PanelDocument, Element, HEIGHT_MM, HOLE_PRESETS, number, load_references, atomic_write
 
@@ -39,6 +41,8 @@ class PanelWorkspace:
         self.y = tk.StringVar(value='0')
         self.size = tk.StringVar(value='6.5')
         self.text = tk.StringVar(value='DRIVE')
+        self.font_choice = tk.StringVar(value=FONTS['sans'][0])
+        self._text_images = []
         self.hole_preset = tk.StringVar(value=HOLE_PRESETS['potentiometer'][0])
         self._build()
         self._apply_original_theme()
@@ -82,7 +86,7 @@ class PanelWorkspace:
         toolbar = ttk.Frame(self, padding=(10, 8))
         toolbar.pack(fill='x')
         for label, command in [('Cargar PCB / Gerber', self.load_pcb), ('Abrir proyecto', self.open_project),
-                               ('Guardar', self.save), ('Exportar SVG', self.export_svg),
+                               ('Guardar', self.save), ('Exportar SVG', self.export_svg), ('Gerber / ZIP…', self.export_gerber),
                                ('Deshacer', self.undo), ('Rehacer', self.redo), ('Ajustar vista', self.fit)]:
             ttk.Button(toolbar, text=label, command=command).pack(side='left', padx=3)
         menu = tk.Menu(self)
@@ -176,6 +180,9 @@ class PanelWorkspace:
         entry(controls, 'Y desde abajo', self.y)
         entry(controls, 'Diám. / texto (mm)', self.size)
         entry(controls, 'Texto / nombre', self.text)
+        ttk.Label(controls,text='Tipografía del texto:').pack(anchor='w')
+        ttk.Combobox(controls,textvariable=self.font_choice,state='readonly',
+                     values=[v[0] for v in FONTS.values()]).pack(fill='x',pady=3)
         ttk.Button(controls, text='Añadir en X / Y', command=self.add_numeric).pack(fill='x', pady=(5, 2))
         ttk.Button(controls, text='Aplicar al objeto seleccionado', command=self.apply_selection).pack(fill='x', pady=2)
         ttk.Label(controls, text='Clic vacío: colocar. Sobre un objeto: seleccionar y arrastrar, también en modo Agujero/Texto.\nEsc: seleccionar. Rueda: zoom.\nBotón derecho: desplazar la vista.',
@@ -371,7 +378,8 @@ class PanelWorkspace:
             return
         try:
             obj = Element(self.mode.get(), x, y, number(self.size.get(), 0.1, 200), self.text.get(),
-                          self._hole_type() if self.mode.get() == 'hole' else '')
+                          self._hole_type() if self.mode.get() == 'hole' else '', font=self._font_key())
+            if obj.kind=='text':text_mask(obj.text,obj.size,obj.font)
             self.remember()
             self.document.elements.append(obj)
             self.dirty = True
@@ -392,7 +400,8 @@ class PanelWorkspace:
         try:
             old = self.document.elements[self.selected]
             new = replace(old, x=number(self.x.get()), y=number(self.y.get()),
-                          size=number(self.size.get(), 0.1, 200), text=self.text.get())
+                          size=number(self.size.get(), 0.1, 200), text=self.text.get(), font=self._font_key())
+            if new.kind=='text':text_mask(new.text,new.size,new.font)
             if new.source_ref:
                 new.board_x, new.board_y = new.x-self.document.pcb_dx, new.y-self.document.pcb_dy
             self.remember()
@@ -414,6 +423,7 @@ class PanelWorkspace:
             self.y.set(f'{obj.y:.3f}')
             self.size.set(f'{obj.size:g}')
             self.text.set(obj.text)
+            self.font_choice.set(FONTS[obj.font][0])
             if obj.kind == 'hole':
                 kind = 'rack' if obj.is_rack_mount else obj.hole_type or 'custom'
                 self.hole_preset.set(HOLE_PRESETS[kind][0])
@@ -566,6 +576,7 @@ class PanelWorkspace:
             return
         c, d = self.canvas, self.document
         c.delete('all')
+        self._text_images.clear()
         scale = self.transform()[0]
         x0, y0 = self.to_canvas(0, HEIGHT_MM)
         x1, y1 = self.to_canvas(d.width, 0)
@@ -631,8 +642,14 @@ class PanelWorkspace:
                 c.create_line(x-4, y, x+4, y, fill='#9db4c3', tags=(tag,))
                 c.create_line(x, y-4, x, y+4, fill='#9db4c3', tags=(tag,))
             else:
-                item = c.create_text(x, y, text=obj.text, fill=color,
-                                     font=('Arial', -max(1, round(obj.size*scale))), tags=(tag,))
+                try:
+                    mask=text_mask(obj.text,obj.size,obj.font)
+                    image=Image.new('RGBA',mask.size,color);image.putalpha(mask)
+                    image=image.resize((max(1,round(mask.width*PIXEL_MM*scale)),max(1,round(mask.height*PIXEL_MM*scale))),Image.Resampling.LANCZOS)
+                    photo=ImageTk.PhotoImage(image,master=self);self._text_images.append(photo)
+                    item=c.create_image(x,y,image=photo,tags=(tag,))
+                except ValueError as error:
+                    item=c.create_text(x,y,text=str(error),fill='#c34623',tags=(tag,))
                 if selected:
                     c.create_rectangle(*c.bbox(item), outline=color, dash=(3, 2), tags=(tag,))
         c.create_text((x0+x1)/2, y0-18, text=f'{d.hp} HP  ·  {d.width:.2f} mm', fill='#d5e1e9', font=('Segoe UI', 11))
@@ -695,6 +712,38 @@ class PanelWorkspace:
                 self.status.set('SVG exportado a escala 1:1. Incluye frontal, agujeros y textos; la PCB es solo referencia.')
             except OSError as error:
                 messagebox.showerror('Exportación SVG', str(error), parent=self)
+
+    def _font_key(self):
+        return next((k for k,v in FONTS.items() if v[0]==self.font_choice.get()),'sans')
+
+    def export_gerber(self):
+        from panel_gerber import export_panel
+        win=tk.Toplevel(self);win.title('Exportar frontal para PCB');win.transient(self)
+        frame=ttk.Frame(win,padding=16);frame.pack(fill='both',expand=True)
+        ttk.Label(frame,text='Frontal FR4 de 2 capas · serigrafía superior · agujeros sin metalizar\n'
+                  'Incluye contorno, taladros, máscaras cerradas y geometría de los textos.\n'
+                  'Las capas de la PCB de referencia no se exportan.',wraplength=490).pack(anchor='w')
+        copper=tk.BooleanVar(value=True)
+        ttk.Checkbutton(frame,text='Relleno de cobre bajo la máscara, separado de bordes y agujeros',variable=copper).pack(anchor='w',pady=10)
+        ttk.Label(frame,text='Para el acabado blanco sobre negro: elegir máscara negra y serigrafía blanca al pedir.\n'
+                  'Se crea un ZIP numerado, una vista SVG y un informe de comprobación.',wraplength=490).pack(anchor='w')
+        def save_package():
+            folder=filedialog.askdirectory(parent=win,title='Carpeta para Gerber del frontal')
+            if not folder:return
+            try:
+                name=Path(self.project_path).name.removesuffix('.panel.json') if self.project_path else 'frontal'
+                path=export_panel(self.document,folder,name,copper.get())
+                self.status.set(f'Frontal exportado: {path}. Revisa la vista SVG y el visor CAM antes de pedir.')
+                win.destroy()
+                messagebox.showinfo('Gerber del frontal',f'Paquete creado:\n{path}\n\nRevisa agujeros, textos y medidas en el visor de fabricación.',parent=self)
+            except (ValueError,OSError) as error:messagebox.showerror('Exportación Gerber',str(error),parent=win)
+        ttk.Button(frame,text='Generar Gerber y ZIP…',command=save_package).pack(pady=12)
+        win.configure(bg='#252535')
+        for widget in self._descendants(win):
+            if isinstance(widget,ttk.Widget):
+                try:widget.configure(style='Panel.'+widget.winfo_class())
+                except tk.TclError:pass
+        win.grab_set()
 
     def close(self):
         if self.confirm_discard():
