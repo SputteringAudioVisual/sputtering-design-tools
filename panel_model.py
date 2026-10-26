@@ -1,5 +1,5 @@
 """Millimetre geometry and portable documents for the Eurorack front-panel editor."""
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 import json
 import math
 from pathlib import Path
@@ -10,7 +10,7 @@ import zipfile
 
 from gerber_silkscreen_editor import GerberLayer
 from drill import DrillLayer, parameter_format
-from panel_fonts import FONTS
+from panel_fonts import FONTS, FONT_WEIGHTS
 
 HEIGHT_MM = 128.5
 HP_MM = 5.08
@@ -331,7 +331,8 @@ class PanelDocument:
         return len(updates), collisions, skipped
 
     def refdes_labels(self, data, rules, size=2.5, gap=1.0, position='above', font='sans',
-                     prefix='',suffix='',remove_numbers=False,dx=0,dy=0):
+                     prefix='',suffix='',remove_numbers=False,dx=0,dy=0,
+                     update_existing=False,keep_positions=True,keep_text=True,keep_size=False):
         """Propose labels for the same mechanically registered components as holes."""
         from footprint_holes import proposals
         size, gap = number(size, .5, 20), number(gap, 0, 50)
@@ -339,6 +340,8 @@ class PanelDocument:
             raise ValueError('Elige encima, debajo, izquierda o derecha del agujero.')
         from panel_fonts import element_mask,PIXEL_MM
         dx,dy=number(dx,-100,100),number(dy,-100,100)
+        if not all(isinstance(v,bool) for v in (update_existing,keep_positions,keep_text,keep_size)):
+            raise ValueError('Opciones de reimportación no válidas.')
         drills = [(p['x'],p['y']) for r in self.layers if r.coord_format for p in r.layer.drawables]
         items, skipped = proposals(data, rules, self.reference_bounds(), drills)
         holes = {e.source_ref: e for e in self.elements if e.kind == 'hole' and e.source_ref}
@@ -353,6 +356,16 @@ class PanelDocument:
             label=Element('text', x, cy, size, text,
                                   source_ref=item['refdes'], source_footprint=item['footprint'],
                                   board_x=x-self.pcb_dx, board_y=cy-self.pcb_dy, font=font)
+            owned=[e for e in self.elements if e.kind=='text' and e.source_ref==item['refdes']]
+            if update_existing and owned:
+                if len(owned)!=1:raise ValueError(f"{item['refdes']}: hay varias etiquetas vinculadas; revisa las duplicadas.")
+                old=owned[0]
+                label=replace(old,size=old.size if keep_size else size,font=font,text=old.text if keep_text else text,
+                              source_footprint=item['footprint'])
+                if keep_positions:
+                    element_mask(label)
+                    result.append(label);continue
+                label.x,label.y=x,cy
             mask=element_mask(label)
             if position in {'above','below'}:
                 label.y+=(radius+gap+mask.height*PIXEL_MM/2)*(1 if position=='above' else -1)
@@ -363,14 +376,16 @@ class PanelDocument:
         return result, skipped
 
     def apply_refdes_labels(self, data, rules, selected_refs, size=2.5, gap=1.0, position='above', font='sans',
-                            prefix='',suffix='',remove_numbers=False,dx=0,dy=0):
+                            prefix='',suffix='',remove_numbers=False,dx=0,dy=0,
+                            update_existing=False,keep_positions=True,keep_text=True,keep_size=False):
         from footprint_holes import validate_data, validate_rules
         data, rules = validate_data(data), validate_rules(rules)
-        labels, skipped = self.refdes_labels(data, rules, size, gap, position, font,prefix,suffix,remove_numbers,dx,dy)
+        labels, skipped = self.refdes_labels(data, rules, size, gap, position, font,prefix,suffix,remove_numbers,dx,dy,
+                                             update_existing,keep_positions,keep_text,keep_size)
         selected = set(selected_refs)
         if not selected.issubset({e.source_ref for e in labels}):
             raise ValueError('Hay componentes seleccionados sin etiqueta válida.')
-        updates, preserved = [], []
+        updates, preserved, replacements = [], [], {}
         for label in labels:
             if label.source_ref not in selected:
                 continue
@@ -379,14 +394,17 @@ class PanelDocument:
             if not (half_width <= label.x <= self.width-half_width and
                     half_height <= label.y <= HEIGHT_MM-half_height):
                 raise ValueError(f'{label.source_ref}: la etiqueta queda fuera del frontal.')
-            if self.has_refdes_label(label):
+            owned=[i for i,e in enumerate(self.elements) if e.kind=='text' and e.source_ref==label.source_ref]
+            if update_existing and owned:
+                replacements[owned[0]]=label
+            elif self.has_refdes_label(label):
                 # Keep hand-edited label text and offsets on repeated imports.
                 preserved.append(label.source_ref)
                 continue
-            updates.append(label)
-        self.elements.extend(updates)
+            else:updates.append(label)
+        self.elements=[replacements.get(i,e) for i,e in enumerate(self.elements)]+updates
         self.component_data, self.footprint_rules = data, rules
-        return len(updates), preserved, skipped
+        return len(updates)+len(replacements), preserved, skipped
 
     def has_refdes_label(self,label):
         return any(e.kind=='text' and (e.source_ref==label.source_ref or
@@ -468,7 +486,7 @@ class PanelDocument:
                 for row,text in enumerate(rows):
                     y=(row-(len(rows)-1)/2)*element.size*element.line_spacing
                     lines.append(f'<text x="{x:g}" y="{y:g}" text-anchor="{anchor}" '
-                                 f'font-family="{FONTS[element.font][1]}" font-weight="{"bold" if element.font=="console" else "normal"}" '
+                                 f'font-family="{FONTS[element.font][1]}" font-weight="{FONT_WEIGHTS.get(element.font,"normal")}" '
                                  f'letter-spacing="{element.tracking:g}" font-size="{element.size:g}">{escape(text)}</text>')
                 lines.append('</g>')
         return '\n'.join(lines + ['</g>', '</svg>', ''])
