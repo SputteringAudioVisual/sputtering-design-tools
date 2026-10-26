@@ -273,7 +273,7 @@ class RefdesLabelTests(unittest.TestCase):
             app.document=self.document();app.refresh();before=app.document.to_dict()
             dialog=FootprintDialog(app,mode='texts')
             self.assertEqual(dialog.checked,{'P1','J1','S1'})
-            self.assertEqual({app.canvas.type(i) for i in app.canvas.find_withtag('footprint_preview')},{'text'})
+            self.assertEqual({app.canvas.type(i) for i in app.canvas.find_withtag('footprint_preview')},{'image'})
             dialog.close();self.assertEqual(app.document.to_dict(),before)
             dialog=FootprintDialog(app,mode='texts');dialog.text_gap.set('-1');dialog.refresh()
             self.assertFalse(dialog.checked)
