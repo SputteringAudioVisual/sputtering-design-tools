@@ -4,7 +4,7 @@ Herramientas de diseño de Sputtering Audio Visual, centradas inicialmente en PC
 
 ## Estado actual
 
-El flujo de serigrafía conserva su validación del **23 de octubre de 2026**. El frontal sigue evolucionando y el **25 de octubre** incorpora agujeros automáticos desde footprints. Pasan **93 pruebas locales**. Historial y comprobaciones en [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md).
+El flujo de serigrafía conserva su validación del **23 de octubre de 2026**. El frontal sigue evolucionando y el **25 de octubre** incorpora agujeros automáticos desde footprints. Pasan **97 pruebas locales**. Historial y comprobaciones en [ESTADO_ACTUAL.md](ESTADO_ACTUAL.md).
 
 La pantalla principal conserva el editor Gerber y su flujo de serigrafía: capas, imágenes PNG/JPG/SVG, conversión, posición/escala/giro, alineación, recetas y selección de destinos. Los drills Excellon se muestran como referencia. Blanco representa tinta sobre PCB negra y la conversión aplicada se comparte entre la vista y la exportación.
 
@@ -19,6 +19,8 @@ El frontal Eurorack 3U es una ventana adicional de la misma aplicación: ancho e
 **Gerber / ZIP…** exporta el frontal a un paquete de fabricación RS-274X y Excellon NPTH, con contorno, serigrafías, máscaras y cobre opcional. Los textos de Arial, Consolas, Old English y Bahnschrift se convierten a geometría; la previsualización comparte esa tinta. El paquete numerado incluye una vista de fabricación y un informe de integridad como archivos adicionales junto al ZIP.
 
 Los textos admiten varias líneas, giro, ancho, espaciado, alineación, engrosado, estilo en lote y duplicado. La importación de etiquetas añade prefijo/sufijo, cuatro lados y desplazamientos. Una biblioteca común y el informe de compatibilidad permiten reutilizar las reglas entre módulos; las huellas no configuradas quedan pendientes en lugar de inventar agujeros.
+
+El catálogo de texto incluye 12 tipografías. La reimportación puede actualizar las etiquetas vinculadas en lote, conservando por defecto sus posiciones y textos editados, con previsualización y deshacer.
 
 Guía de uso, recorte, conversión y exportación: [FRONTAL_3U.md](FRONTAL_3U.md).
 
