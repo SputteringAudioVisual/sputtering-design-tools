@@ -11,6 +11,8 @@ from tkinter import ttk, filedialog, messagebox
 
 from footprint_holes import DEFAULT_RULES, read_pcb, proposals, validate_rules
 from panel_model import HOLE_PRESETS, HEIGHT_MM, atomic_write
+from panel_fonts import FONTS, text_mask, PIXEL_MM
+from PIL import Image, ImageTk
 
 ANCHOR_LABELS = {'mechanical_pair': 'Centro entre 2 anclajes mecánicos',
                  'padstack': 'Centro del padstack indicado', 'pin': 'Centro del pin indicado',
@@ -38,6 +40,8 @@ class FootprintDialog(tk.Toplevel):
         self.text_size = tk.StringVar(value='2.5')
         self.text_gap = tk.StringVar(value='1.0')
         self.text_position = tk.StringVar(value='Encima')
+        self.text_font = tk.StringVar(value=FONTS['sans'][0])
+        self.preview_images=[]
         top=ttk.Frame(self,padding=10);top.pack(fill='x')
         self.read_button=ttk.Button(top,text='Leer PCB / referencia…',command=self.choose_source)
         self.read_button.pack(side='left')
@@ -52,6 +56,10 @@ class FootprintDialog(tk.Toplevel):
                 ttk.Entry(options,textvariable=var,width=7).pack(side='left',padx=4)
             ttk.Combobox(options,textvariable=self.text_position,state='readonly',values=['Encima','Debajo'],width=9).pack(side='left',padx=4)
             ttk.Button(options,text='Actualizar previsualización',command=self.refresh).pack(side='left',padx=4)
+            fontrow=ttk.Frame(self,padding=(10,0));fontrow.pack(fill='x')
+            ttk.Label(fontrow,text='Tipografía:').pack(side='left',padx=4)
+            ttk.Combobox(fontrow,textvariable=self.text_font,state='readonly',width=30,
+                         values=[v[0] for v in FONTS.values()]).pack(side='left',padx=4)
         frame=ttk.Frame(self,padding=(10,0));frame.pack(fill='both',expand=True)
         columns=('use','ref','footprint','kind','x','y','diameter','action')
         self.table=ttk.Treeview(frame,columns=columns,show='headings',height=14,selectmode='browse')
@@ -178,7 +186,8 @@ class FootprintDialog(tk.Toplevel):
     def text_options(self):
         from panel_model import number
         return dict(size=number(self.text_size.get(),.5,20),gap=number(self.text_gap.get(),0,50),
-                    position='above' if self.text_position.get()=='Encima' else 'below')
+                    position='above' if self.text_position.get()=='Encima' else 'below',
+                    font=next(k for k,v in FONTS.items() if v[0]==self.text_font.get()))
 
     def add_text_row(self,item,label):
         d=self.owner.document
@@ -249,13 +258,17 @@ class FootprintDialog(tk.Toplevel):
         for ref in self.items:self.table.set(ref,'use','✓' if ref in self.checked else '')
         self.apply_button.configure(state='normal' if self.checked and not self.busy else 'disabled')
         self.owner.canvas.delete('footprint_preview')
+        self.preview_images.clear()
         d=self.owner.document;scale=self.owner.transform()[0]
         for ref in self.checked:
             p=self.items[ref][0]
             if self.mode == 'texts':
                 label=p['label'];x,y=self.owner.to_canvas(label.x,label.y)
-                self.owner.canvas.create_text(x,y,text=label.text,fill='#b050e0',
-                    font=('Arial',-max(1,round(label.size*scale))),tags='footprint_preview')
+                mask=text_mask(label.text,label.size,label.font)
+                image=Image.new('RGBA',mask.size,'#b050e0');image.putalpha(mask)
+                image=image.resize((max(1,round(mask.width*PIXEL_MM*scale)),max(1,round(mask.height*PIXEL_MM*scale))),Image.Resampling.LANCZOS)
+                photo=ImageTk.PhotoImage(image,master=self);self.preview_images.append(photo)
+                self.owner.canvas.create_image(x,y,image=photo,tags='footprint_preview')
                 continue
             x,y=self.owner.to_canvas(p['x_mm']+d.pcb_dx,p['y_mm']+d.pcb_dy)
             r=p['diameter_mm']*scale/2
