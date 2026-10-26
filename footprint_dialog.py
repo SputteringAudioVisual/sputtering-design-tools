@@ -47,13 +47,17 @@ class FootprintDialog(tk.Toplevel):
         self.text_prefix=tk.StringVar();self.text_suffix=tk.StringVar()
         self.remove_numbers=tk.BooleanVar(value=False)
         self.label_dx=tk.StringVar(value='0');self.label_dy=tk.StringVar(value='0')
+        self.update_existing=tk.BooleanVar(value=True)
+        self.keep_positions=tk.BooleanVar(value=True)
+        self.keep_text=tk.BooleanVar(value=True)
+        self.keep_size=tk.BooleanVar(value=True)
         self.preview_images=[]
         top=ttk.Frame(self,padding=10);top.pack(fill='x')
         self.read_button=ttk.Button(top,text='Leer PCB / referencia…',command=self.choose_source)
         self.read_button.pack(side='left')
         ttk.Button(top,text='Compatibilidad de la PCB…',command=self.show_coverage).pack(side='left',padx=5)
         ttk.Label(top,textvariable=self.status,wraplength=630).pack(side='left',padx=10)
-        ttk.Label(self,text=('Importa el refdes de los componentes con agujero como texto editable. Las etiquetas existentes se conservan.' if mode == 'texts' else
+        ttk.Label(self,text=('Importa o actualiza las etiquetas refdes. Puedes cambiar la fuente de todas conservando sus posiciones y textos editados.' if mode == 'texts' else
                   'Revisa los centros y diámetros. Doble clic o Espacio marca/desmarca. Los círculos violetas son una previsualización.'),
                   wraplength=1050).pack(anchor='w',padx=12,pady=5)
         if mode == 'texts':
@@ -65,12 +69,17 @@ class FootprintDialog(tk.Toplevel):
             ttk.Button(options,text='Actualizar previsualización',command=self.refresh).pack(side='left',padx=4)
             fontrow=ttk.Frame(self,padding=(10,0));fontrow.pack(fill='x')
             ttk.Label(fontrow,text='Tipografía:').pack(side='left',padx=4)
-            ttk.Combobox(fontrow,textvariable=self.text_font,state='readonly',width=30,
-                         values=[v[0] for v in FONTS.values()]).pack(side='left',padx=4)
+            font_combo=ttk.Combobox(fontrow,textvariable=self.text_font,state='readonly',width=30,
+                         values=[v[0] for v in FONTS.values()]);font_combo.pack(side='left',padx=4)
+            font_combo.bind('<<ComboboxSelected>>',lambda event:self.refresh())
             for label,var in [('Prefijo',self.text_prefix),('Sufijo',self.text_suffix),('ΔX mm',self.label_dx),('ΔY mm',self.label_dy)]:
                 ttk.Label(fontrow,text=label).pack(side='left',padx=3)
                 ttk.Entry(fontrow,textvariable=var,width=7).pack(side='left',padx=3)
             ttk.Checkbutton(self,text='Quitar números finales del refdes en la etiqueta',variable=self.remove_numbers).pack(anchor='w',padx=14)
+            reimport=ttk.Frame(self,padding=(10,5));reimport.pack(fill='x')
+            for label,var in [('Actualizar ya importadas',self.update_existing),('Conservar posiciones',self.keep_positions),
+                              ('Conservar textos editados',self.keep_text),('Conservar tamaños',self.keep_size)]:
+                ttk.Checkbutton(reimport,text=label,variable=var,command=self.refresh).pack(side='left',padx=5)
         frame=ttk.Frame(self,padding=(10,0));frame.pack(fill='both',expand=True)
         columns=('use','ref','footprint','kind','x','y','diameter','action')
         self.table=ttk.Treeview(frame,columns=columns,show='headings',height=14,selectmode='browse')
@@ -203,18 +212,24 @@ class FootprintDialog(tk.Toplevel):
                     position={'Encima':'above','Debajo':'below','Izquierda':'left','Derecha':'right'}[self.text_position.get()],
                     font=next(k for k,v in FONTS.items() if v[0]==self.text_font.get()),
                     prefix=self.text_prefix.get(),suffix=self.text_suffix.get(),remove_numbers=self.remove_numbers.get(),
-                    dx=number(self.label_dx.get(),-100,100),dy=number(self.label_dy.get(),-100,100))
+                    dx=number(self.label_dx.get(),-100,100),dy=number(self.label_dy.get(),-100,100),
+                    update_existing=self.update_existing.get(),keep_positions=self.keep_positions.get(),keep_text=self.keep_text.get(),
+                    keep_size=self.keep_size.get())
 
     def add_text_row(self,item,label):
         d=self.owner.document
         mask=element_mask(label);half_width=mask.width*PIXEL_MM/2;half_height=mask.height*PIXEL_MM/2
         outside=not(half_width<=label.x<=d.width-half_width and half_height<=label.y<=HEIGHT_MM-half_height)
         exists=d.has_refdes_label(label)
-        valid=not outside and not exists
-        reviewed=not item.get('review_required') or any(e.kind=='hole' and e.source_ref==item['refdes'] for e in d.elements)
+        linked=any(e.kind=='text' and e.source_ref==item['refdes'] for e in d.elements)
+        updating=linked and self.update_existing.get()
+        valid=not outside and (not exists or updating)
+        reviewed=not item.get('review_required') or linked or any(e.kind=='hole' and e.source_ref==item['refdes'] for e in d.elements)
         ref=item['refdes']
-        self.items[ref]=(dict(item,label=label),valid,'Texto existente: conservar' if exists else 'Fuera del frontal' if outside
-                         else 'Revisar agujero/diámetro' if not reviewed else 'Añadir texto')
+        action=('Fuera del frontal' if outside else 'Actualizar estilo' if updating and self.keep_positions.get() and self.keep_text.get()
+                else 'Actualizar etiqueta' if updating else 'Texto existente: conservar' if exists
+                else 'Revisar agujero/diámetro' if not reviewed else 'Añadir texto')
+        self.items[ref]=(dict(item,label=label,review_required=not reviewed),valid,action)
         if valid and reviewed:self.checked.add(ref)
         self.table.insert('','end',iid=ref,values=('✓' if valid else '',ref,item['footprint'],'Etiqueta refdes',
             f'{label.x:.3f}',f'{label.y:.3f}',f'{label.size:g}',self.items[ref][2]))
@@ -324,7 +339,7 @@ class FootprintDialog(tk.Toplevel):
             else:
                 count,collisions,_=candidate.apply_footprint_holes(self.data,self.rules,self.checked)
             self.owner.remember();self.owner.document=candidate;self.owner.selected=None;self.owner.changed()
-            self.owner.status.set(f'{count} '+('etiquetas refdes importadas. ' if self.mode == 'texts' else 'agujeros desde footprints añadidos/actualizados. ')
+            self.owner.status.set(f'{count} '+('etiquetas refdes añadidas/actualizadas. ' if self.mode == 'texts' else 'agujeros desde footprints añadidos/actualizados. ')
                                   + f'{len(collisions)} coincidencias existentes conservadas. Guarda el proyecto para conservar la referencia.')
             self.close()
         except ValueError as error:messagebox.showerror('Agujeros desde PCB',str(error),parent=self)
