@@ -2,6 +2,12 @@
 
 El flujo original de serigrafía mantiene su validación. El frontal continúa su desarrollo con exportación de fabricación, edición de textos y biblioteca reutilizable entre módulos.
 
+## Más fuentes y reimportación de etiquetas — 26 de octubre de 2026
+
+Se amplía el catálogo a 12 fuentes instaladas. El importador permite actualizar fuente/tamaño de etiquetas vinculadas existentes, conservando por defecto posiciones, textos editados y ajustes avanzados. Puede regenerar posición o contenido de forma explícita. La previsualización refleja el resultado, los textos manuales no se sustituyen y la operación admite deshacer/rehacer sin duplicar objetos.
+
+Pasan **97 pruebas locales**; la geometría de tinta de las 12 tipografías se contrasta además con Gerbonara.
+
 ## Textos y reutilización entre módulos — 26 de octubre de 2026
 
 Validación actual: **93 pruebas locales**; las comprobaciones posteriores del preajuste DPDT y del inicio de módulos nuevos también pasan.
