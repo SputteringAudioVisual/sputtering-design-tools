@@ -92,7 +92,7 @@ Las reglas nuevas de mini-SPDT, DPDT y variantes de interruptor quedan desmarcad
 
 En **2 · PCB de referencia**, **Importar textos desde .brd…** propone los refdes de los componentes con una regla de agujero. Utiliza la referencia de componentes guardada en el proyecto o permite leer un `.brd` / JSON actualizado. No importa todos los textos de serigrafía ni añade referencias de resistencias sin agujero.
 
-Elige altura de texto, separación respecto al borde del agujero y posición **Encima/Debajo**, y pulsa **Actualizar previsualización**. La tabla y los textos violetas muestran lo que se añadirá; marca las referencias deseadas y pulsa **Aplicar seleccionados**. Los textos quedan editables, se exportan en SVG y admiten deshacer/rehacer. Si has movido o cambiado el diámetro de un agujero generado, la etiqueta usa esa posición y diámetro actuales. Al mover la PCB, las etiquetas generadas la acompañan. Una importación repetida conserva las etiquetas existentes y sus ajustes manuales en lugar de duplicarlas.
+Elige altura de texto, separación respecto al borde del agujero y posición **Encima/Debajo/Izquierda/Derecha**, y pulsa **Actualizar previsualización**. La tabla y los textos violetas muestran lo que se añadirá; marca las referencias deseadas y pulsa **Aplicar seleccionados**. Los textos quedan editables, se exportan en SVG y admiten deshacer/rehacer. Si has movido o cambiado el diámetro de un agujero generado, la etiqueta usa esa posición y diámetro actuales. Al mover la PCB, las etiquetas generadas la acompañan. Una importación repetida permite actualizar el estilo de las etiquetas existentes sin duplicarlas.
 
 **Herramientas → Vaciar agujeros y textos (conservar PCB)** permite empezar el frontal desde cero manteniendo ancho, referencias y biblioteca; se puede deshacer. Los objetos vuelven al reabrir únicamente si forman parte del proyecto guardado: no son archivos temporales. Las lecturas `.brd` utilizan una carpeta temporal independiente que se elimina al finalizar.
 
@@ -104,6 +104,10 @@ El perfil es FR4 de dos capas con tinta en la cara superior. Las máscaras cerra
 
 La exportación impide agujeros solapados/fuera del panel, menos de 0,2 mm de material entre taladros, tinta fuera del frontal y tinta a menos de 0,15 mm de un agujero. La altura impresa del texto debe alcanzar 1 mm. Los círculos de 8,128 mm se mantienen en Excellon: [JLCPCB indica que los agujeros desde 6,3 mm se fresan mediante CNC](https://jlcpcb.com/capabilities/pcb-capabilities/). Se utilizan [nombres de capas reconocibles y coordenadas absolutas en milímetros](https://jlcpcb.com/help/article/gerber-files-preparation). Revisar siempre contorno, taladros y texto en el visor CAM de la orden antes de confirmarla.
 
+### Reimportar y actualizar etiquetas
+
+Activa **Actualizar ya importadas** para cambiar fuente y tamaño de las etiquetas vinculadas existentes sin duplicarlas. Está activo inicialmente, junto con **Conservar posiciones**, **Conservar textos editados** y **Conservar tamaños**: así se mantiene la colocación manual, el contenido personalizado y los demás ajustes avanzados. Desmarca **Conservar tamaños** para imponer el tamaño elegido a todas las etiquetas. Puedes desmarcar la conservación de posiciones para recolocarlas o la de texto para regenerar prefijos/sufijos y nombres. Desactivar la actualización conserva las existentes como antes. Los textos manuales sin vínculo no se reemplazan. La tabla muestra Añadir / Actualizar y los cambios se previsualizan; aplicar constituye un solo paso de deshacer.
+
 ### Edición avanzada de textos
 
 El campo de texto permite hasta ocho líneas. Cada objeto guarda giro en grados, ancho entre 25–400 %, separación entre letras, interlineado, alineación izquierda/centro/derecha y engrosado de tinta por lado. **Aplicar al objeto seleccionado** confirma los ajustes. **Aplicar estilo a todos los textos** cambia tamaño/estilo sin alterar contenido, posiciones, agujeros ni vínculos a la PCB, con una sola acción de deshacer. **Duplicar objeto seleccionado** crea una copia editable independiente del vínculo automático del original.
@@ -114,7 +118,7 @@ El giro, ancho y espaciados se comparten entre pantalla, vista de fabricación y
 
 ### Tipografías
 
-Se añaden **Consola · Consolas**, **Gótica · Old English** e **Industrial · Bahnschrift**, además de Arial. La fuente se elige al colocar textos, al editar un texto seleccionado (**Aplicar al objeto seleccionado**) y al importar refdes. Se guarda con cada elemento. Se necesitan las fuentes instaladas; si falta una, se avisa en lugar de sustituirla silenciosamente al exportar.
+Se añaden **Consola · Consolas**, **Gótica · Old English** e **Industrial · Bahnschrift**, además de Arial. Fuentes disponibles: **Arial, Consolas, Old English Text MT, Bahnschrift, Impact, Arial Narrow, Stencil, OCR A Extended, Agency FB, Rockwell, Magneto y Georgia**. La fuente se elige al colocar textos, al editar un texto seleccionado (**Aplicar al objeto seleccionado**) y al importar refdes. Se guarda con cada elemento. Se necesitan las fuentes instaladas; si falta una, se avisa en lugar de sustituirla silenciosamente al exportar.
 
 La vista del frontal, la vista SVG de fabricación y el Gerber usan la misma máscara de tinta a 0,025 mm. Los contornos de los caracteres se convierten en regiones Gerber rellenas; los huecos de las letras se conservan. Se engrosan 0,075 mm por lado para proteger trazos finos. No se envían archivos de fuentes al fabricante. Para la gótica conviene usar texto mayor y revisar sus huecos. El SVG editable continúa disponible por separado y depende de las fuentes del equipo donde se abra.
 
