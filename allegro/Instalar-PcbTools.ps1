@@ -38,7 +38,14 @@ foreach ($item in Get-ChildItem -LiteralPath $PSScriptRoot -File) {
     }
 }
 $asciiRoot = $destination.Replace('\','/')
-$entry = "load(`"$asciiRoot/pcb_utilidades.il`")`r`npcbCargar(`"$asciiRoot`")`r`n"
+$entry = @"
+pcbToolsLoadRoot="$asciiRoot"
+unless(isCallable('pcbCargar) && boundp('pcbToolsBootstrapTime) &&
+  equal(pcbToolsBootstrapTime fileTimeModified(strcat(pcbToolsLoadRoot "/pcb_utilidades.il")))
+  load(strcat(pcbToolsLoadRoot "/pcb_utilidades.il"))
+  pcbToolsBootstrapTime=fileTimeModified(strcat(pcbToolsLoadRoot "/pcb_utilidades.il")))
+pcbCargar(pcbToolsLoadRoot)
+"@
 [IO.File]::WriteAllText((Join-Path $destination 'pcb_cargar.il'), $entry, [Text.Encoding]::ASCII)
 $init = Join-Path $profileRoot 'allegro.ilinit'
 Save-Previous $init

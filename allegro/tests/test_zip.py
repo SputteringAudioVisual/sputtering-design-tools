@@ -78,6 +78,42 @@ class PackageTests(unittest.TestCase):
         self.assertNotEqual(self.run_helper().returncode, 0)
         self.assertFalse(self.archive.exists())
 
+    def test_expected_slots_missing_prevents_packaging(self):
+        self.info.write_text('tools_version=0.3.0\nartwork_status=0\nncdrill_status=0\n'
+                             'expected_plated_slots=15\nexpected_nonplated_slots=0\n', encoding='ascii')
+        result = self.run_helper()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Incomplete NC slots', result.stderr)
+        self.assertFalse(self.archive.exists())
+
+    def test_complete_slots_count_is_recorded(self):
+        self.info.write_text('tools_version=0.3.0\nartwork_status=0\nncdrill_status=0\nncroute_status=0\n'
+                             'expected_plated_slots=2\nexpected_nonplated_slots=0\n', encoding='ascii')
+        route = ('M48\nMETRIC,TZ\nT01C1.1\n%\nG90\nT01\n'
+                 'G00X100Y100\nM15\nG01X200Y100\nM16\n'
+                 'G00X300Y100\nM15\nG01X400Y100\nM16\nM30\n')
+        (self.folder / 'PCB_SLOTS_plated.rou').write_text(route, encoding='ascii')
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(self.archive) as archive:
+            manifest = json.loads(archive.read('manifest.json'))
+            self.assertEqual(manifest['slots'], {'expected_plated': 2, 'expected_nonplated': 0,
+                                                'routed_plated': 2, 'routed_nonplated': 0})
+            self.assertIn('PCB_SLOTS_plated.rou', archive.namelist())
+
+    def test_logged_warning_is_not_hidden_by_zero_process_status(self):
+        self.info.write_text('tools_version=0.3.0\nartwork_status=0\nncdrill_status=0\n', encoding='ascii')
+        (self.folder / 'ncdrill.log').write_text('WARNING: generated tools automatically\n', encoding='ascii')
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(self.archive) as archive:
+            self.assertEqual(json.loads(archive.read('manifest.json'))['status'], 'REQUIERE_REVISION_AVISOS')
+
+    def test_separate_routing_is_not_silently_dropped(self):
+        (self.folder / 'PCB_DRILL.rou').write_text('routing', encoding='ascii')
+        self.assertNotEqual(self.run_helper().returncode, 0)
+        self.assertFalse(self.archive.exists())
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

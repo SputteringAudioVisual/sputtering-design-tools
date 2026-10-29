@@ -1,6 +1,6 @@
 # Guía de uso de las utilidades Allegro
 
-Versión **0.2.2**, para **Cadence Allegro PCB Editor 17.2 en Windows**. Sirven para distintas PCB: textos de referencia, máscara de soldadura, reglas de anchos y exportación de Gerber + NC Drill en ZIP con versión.
+Versión **0.3.0**, para **Cadence Allegro PCB Editor 17.2 en Windows**. Sirven para distintas PCB: textos de referencia, máscara de soldadura, reglas de anchos y exportación de Gerber + NC Drill en ZIP con versión.
 
 ## 1. Instalar o actualizar
 
@@ -28,7 +28,7 @@ Después escribe:
 pcb_info
 ```
 
-Debe indicar **versión 0.2.2** y la carpeta central. Los mensajes `function … redefined` son normales al recargar; `t` es el retorno habitual de una operación correcta. Cargar el paquete no modifica la placa.
+Debe indicar **versión 0.3.0** y la carpeta central. Una recarga sin archivos cambiados verifica los comandos sin redefinir funciones. `function … redefined` sigue siendo normal al actualizar o forzar una recarga con `pcb_recargar`; `t` es un retorno habitual de una operación correcta. Cargar el paquete no modifica la placa.
 
 Ejecuta cada comando por separado y espera su resultado. Los nombres `pcb_*` se escriben directamente en **Command**, sin añadir `skill`.
 
@@ -41,17 +41,29 @@ Al probar en otro diseño, guarda primero una copia de la PCB. Ejecuta la audito
 | `pcb_textos_auditar` | `pcb_textos` | Normaliza referencias conservando posición y giro; elimina duplicados y, por defecto, textos de valor/dispositivo asociados. |
 | `pcb_mascara_revisar` | `pcb_mascara` | Expone los pads de componentes y cubre las vías mediante sus padstacks. Crea una copia de seguridad antes de corregir. |
 | `pcb_anchos_auditar` | `pcb_anchos` | Asigna reglas físicas para el trazado posterior y conserva las reglas especiales existentes. |
+| `pcb_textos_faltantes_auditar` | `pcb_textos_recrear` | Opcional: crea únicamente referencias ausentes en el origen del símbolo, para colocarlas manualmente. |
+| `pcb_vias_auditar` | `pcb_vias_normalizar` | Opcional: sustituye vías circulares ordinarias existentes por las dimensiones del perfil. |
 | `pcb_fab_auditar` | `pcb_fab_exportar` | Comprueba las capas y genera el paquete de fabricación. |
 
 No necesitas aplicar todos los comandos en cada placa. Si la máscara indica cero pines pendientes, cero vías abiertas y ningún conflicto adicional, no hay corrección que aplicar. El informe completo queda en `pcb_mascara_revision.txt` junto a la PCB.
 
-Los textos empiezan en **0,79 × 0,58 mm**, con trazo **0,15 mm**. Las referencias sin texto asociado se avisan y no se crean automáticamente. `pcb_anchos` no redimensiona pistas ni vías existentes: configura señal a **0,40 mm** y alimentación a **0,80 mm**, salvo reglas especiales conservadas. Por eso puede informar de cero redes de potencia modificadas aunque existan alimentaciones.
+Los textos empiezan en **0,79 × 0,58 mm**, con trazo **0,15 mm**. Las referencias ausentes se avisan: `pcb_textos` no las crea. Para recuperarlas, ejecuta `pcb_textos_faltantes_auditar` y, si procede, `pcb_textos_recrear`. Este último crea backup y añade únicamente las ausentes, asociadas al símbolo y en su origen; debes colocarlas manualmente para evitar solapamientos. Omite textos homónimos existentes en otro objeto y símbolos fijos. `pcb_anchos` no redimensiona pistas ni vías existentes: configura señal a **0,40 mm** y alimentación a **0,80 mm**, salvo reglas especiales conservadas. Por eso puede informar de cero redes de potencia modificadas aunque existan alimentaciones. La auditoría muestra además el ancho mínimo/máximo real por capa de las reglas conservadas, y avisa de diferencias con el perfil o herencia ambigua.
+
+`pcb_vias_normalizar` es independiente: revisa primero `pcb_vias_auditar`. Crea backup y sustituye únicamente vías circulares pasantes ordinarias. Conserva posición, red, capas y conexiones a pistas; reutiliza una vía compatible admitida por la regla física y omite casos especiales, puntos de prueba, vías fijas o reglas ambiguas. No toca pines, slots, microvías ni backdrill. Los errores revierten toda la operación. Tras cambiar vías, la exportación exige ejecutar `pcb_revision_actualizar`.
 
 Los cambios quedan **en memoria**. Revisa la placa y usa **File > Save**. Las utilidades no añaden conexiones de tierra ni resuelven islas de cobre. La referencia de [comportamiento y límites](README.md) detalla las geometrías admitidas por la herramienta de máscara.
 
 ## 4. Exportar Gerber y taladrado
 
-El exportador admite **dos capas de cobre positivas llamadas TOP y BOTTOM**. Antes de fabricar, actualiza y revisa los DRC, las conexiones y los rellenos de cobre en Allegro. Después ejecuta:
+El exportador admite **dos capas de cobre positivas llamadas TOP y BOTTOM**. Antes de fabricar, ejecuta:
+
+```text
+pcb_revision_actualizar
+```
+
+Crea backup, recalcula los rellenos y ejecuta DRC completos según las reglas activas; activa los DRC en línea si estaban desactivados. Revisa los errores y las conexiones que indique. No corrige los problemas eléctricos ni mecánicos. Tras cambiar vías, la exportación se detiene hasta esta actualización; también se detiene si quedan shapes desactualizados. Cerrar Allegro no sustituye una revisión final.
+
+Después ejecuta:
 
 ```text
 pcb_fab_auditar
@@ -63,9 +75,9 @@ La auditoría debe encontrar todas las capas necesarias. Comprueba su salida y e
 pcb_fab_exportar
 ```
 
-La exportación configura automáticamente siete films: cobre TOP/BOTTOM, máscara TOP/BOTTOM, serigrafía TOP/BOTTOM y contorno. No hace falta ejecutar antes `pcb_fab_configurar`; este último queda disponible si solo quieres preparar los films y revisarlos. Se reemplazan los films de esos siete nombres.
+La exportación configura automáticamente siete films: cobre TOP/BOTTOM, máscara TOP/BOTTOM, serigrafía TOP/BOTTOM y contorno. No hace falta ejecutar antes `pcb_fab_configurar`; este último queda disponible si solo quieres preparar los films y revisarlos. La configuración deja exactamente esos siete films: elimina los adicionales, incluidos los antiguos TOP/BOTTOM, tras guardar un backup. Si utilizas otros films de documentación, consérvalos en tu copia previa antes de configurar. Se verifica el conjunto final y una segunda ejecución no vuelve a cambiarlo.
 
-Los archivos son **Gerber RS-274X métrico 5.5** y **Enhanced Excellon métrico absoluto 5.5**. El taladrado combina PTH y NPTH en un único archivo; confirma que tu fabricante acepta ese formato.
+Los archivos son **Gerber RS-274X métrico 5.5** y **Enhanced Excellon métrico absoluto 5.5**. El taladrado circular combina PTH y NPTH en un único archivo; confirma que tu fabricante acepta ese formato. Los slots ovales NO se incluyen en ese `.drl`: se añade NC Route en `PCB_SLOTS_plated.rou` para metalizados y `PCB_SLOTS.rou` para no metalizados. Entrega también esos archivos. Se valida el recuento por metalización. Solo se admite el slot oval de recorrido lineal; las rutas con arcos o compensación y los slots rectangulares requieren un flujo específico.
 
 La salida se crea dentro de la carpeta donde está guardado el `.brd`, aunque Allegro se iniciara desde otro directorio:
 
@@ -84,9 +96,9 @@ mi_proyecto/
 
 Se elige la primera versión libre; nunca se sobrescribe una carpeta o ZIP anterior. El ZIP incluye:
 
-- Los siete `.art` y el archivo `.drl` de taladrado.
+- Los siete `.art`, el archivo `.drl` de taladrado y los `.rou` de slots cuando existan.
 - `LEEME_FABRICACION.txt` y `manifest.json`, con versiones, estado y comprobaciones SHA-256.
-- `informes/photoplot.log` e `informes/ncdrill.log`.
+- `informes/photoplot.log`, `informes/ncdrill.log` y `informes/ncroute.log` si se generaron slots.
 - `parametros/`, con los parámetros y la configuración efectiva.
 
 La carpeta sin comprimir se conserva al lado del ZIP. La exportación refleja el estado **en memoria** y no guarda la PCB: usa también **File > Save** para conservar los cambios del diseño y los films.
@@ -114,7 +126,7 @@ skill load("C:/PCB/mi_proyecto/pcb_perfil.il")
 
 Usa la ruta real del perfil, con `/` como separador. Los valores permanecen en la sesión al cambiar de placa y al recargar las utilidades; **el perfil de proyecto no se selecciona automáticamente**. Carga el perfil completo de cada proyecto antes de aplicar cambios. El perfil de ejemplo permite volver a los valores iniciales.
 
-Para ajustes comunes a todas las placas, puedes usar `C:/SPB_Data/pcbenv/pcb_tools/pcb_local.il`: el cargador lo lee después de los valores iniciales y cada recarga vuelve a aplicarlo. Un perfil de proyecto cargado después prevalece hasta la siguiente recarga. El instalador conserva el archivo local al actualizar; no contiene una implementación alternativa de las herramientas.
+Para ajustes comunes a todas las placas, puedes usar `C:/SPB_Data/pcbenv/pcb_tools/pcb_local.il`: el cargador lo lee después de los valores iniciales y cada recarga vuelve a aplicarlo. Un perfil de proyecto cargado después prevalece hasta la siguiente recarga que cargue archivos cambiados o se fuerce con `pcb_recargar`. Una recarga sin cambios conserva el perfil actual. El instalador conserva el archivo local al actualizar; no contiene una implementación alternativa de las herramientas.
 
 Opciones frecuentes: `pcbTextRemoveValues = nil` conserva valores asociados; `pcbMaskMarginMM` cambia el margen de máscara; `pcbPowerNets` establece los nombres de alimentación. `pcbFabOutputSubdir` permite una subcarpeta relativa distinta de `Fabricacion`; se rechazan rutas absolutas o con `..`. El contorno usa por defecto `BOARD GEOMETRY/DESIGN_OUTLINE`, configurable con `pcbFabOutlineLayer`.
 

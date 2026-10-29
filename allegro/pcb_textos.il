@@ -34,7 +34,7 @@ procedure(pcbSilkCrearBloque()
 )
 
 procedure(pcbSilkCapaDestino(simbolo)
-  if(simbolo->mirrored then
+  if(simbolo->isMirrored then
     "REF DES/SILKSCREEN_BOTTOM"
   else
     "REF DES/SILKSCREEN_TOP"
@@ -158,6 +158,55 @@ procedure(pcbSilkAplicar()
     else
       axlDBTransactionRollback(tx)
       printf("PCB: textos cancelados y revertidos.\n") return(nil))
+  )
+)
+
+procedure(pcbSilkRefdesPresentes(nombre)
+  let((textos)
+    foreach(obj append(list(axlDBGetDesign()) axlDBGetDesign()->symbols)
+      foreach(txt axlDBGetAttachedText(obj)
+        when(equal(txt->text nombre) textos=cons(txt textos))))
+    textos
+  )
+)
+
+procedure(pcbSilkFaltantesProcesar(aplicar)
+  let((faltan omitidas creadas bloque sym ref orient textos)
+    faltan=0 omitidas=0 creadas=0
+    when(aplicar bloque=pcbSilkCrearBloque())
+    foreach(comp axlDBGetDesign()->components
+      sym=comp->symbol ref=comp->name
+      when(sym && !setof(txt axlDBGetAttachedText(sym) equal(txt->text ref))
+        faltan=faltan+1
+        if(pcbSilkRefdesPresentes(ref) || assoc('FIXED axlDBGetProperties(sym)) then
+          omitidas=omitidas+1
+          printf("PCB REF: OMITIDA %s: existe texto en otro objeto o el simbolo esta fijo; revisar manualmente.\n" ref)
+        else
+          printf("PCB REF: %s en origen %L, capa %s; REQUIERE colocar el texto manualmente.\n"
+            ref sym->xy pcbSilkCapaDestino(sym))
+          when(aplicar
+            orient=make_axlTextOrientation(?textBlock sprintf(nil "%d" bloque)
+              ?rotation 0.0 ?mirrored sym->isMirrored ?justify "center")
+            unless(axlDBCreateText(ref sym->xy orient pcbSilkCapaDestino(sym) sym)
+              error("PCB: no se pudo crear la referencia %s." ref))
+            textos=setof(txt axlDBGetAttachedText(sym) equal(txt->text ref))
+            unless(length(textos)==1 && equal(car(textos)->xy sym->xy) &&
+              equal(car(textos)->layer pcbSilkCapaDestino(sym))
+              error("PCB: la referencia nueva no quedo asociada correctamente a %s." ref))
+            creadas=creadas+1))))
+    printf("PCB REF: faltantes %d; omitidas %d; creadas %d. No se borra ni se mueve texto existente.\n"
+      faltan omitidas creadas)
+    if(aplicar then creadas else list(faltan omitidas))
+  )
+)
+
+procedure(pcbSilkFaltantesAuditar() pcbSilkFaltantesProcesar(nil))
+procedure(pcbSilkFaltantesWorker() pcbSilkFaltantesProcesar(t))
+procedure(pcbSilkRecrear()
+  prog((audit)
+    audit=pcbSilkFaltantesAuditar()
+    when(car(audit)==cadr(audit) return(t))
+    return(pcbProyectoAplicar("referencias" 'pcbSilkFaltantesWorker))
   )
 )
 

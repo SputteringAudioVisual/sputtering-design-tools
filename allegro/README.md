@@ -1,6 +1,6 @@
 # Utilidades PCB para Cadence Allegro
 
-Comandos SKILL reutilizables para preparar serigrafía, máscara, reglas de pistas y archivos de fabricación. Versión **0.2.2**, destinada a **Allegro PCB Editor 17.2 en Windows**. No dependen del nombre de la placa ni de una carpeta personal.
+Comandos SKILL reutilizables para preparar serigrafía, máscara, reglas de pistas y archivos de fabricación. Versión **0.3.0**, destinada a **Allegro PCB Editor 17.2 en Windows**. No dependen del nombre de la placa ni de una carpeta personal.
 
 ## Por dónde empezar
 
@@ -21,7 +21,7 @@ Las dimensiones de configuración siempre son milímetros; la conversión a unid
 
 Valores iniciales: **alto 0,79 mm, ancho 0,58 mm y trazo 0,15 mm**. La referencia conserva posición, giro y justificación; cambia de capa a `REF DES/SILKSCREEN_TOP` o `BOTTOM` según la cara del componente.
 
-Se eliminan referencias duplicadas y, de forma predeterminada, los demás textos asociados al símbolo (valores o nombres de dispositivo). Para conservar estos últimos, usa `pcbTextRemoveValues = nil`. No se borran textos independientes, dibujos del encapsulado ni marcas gráficas de polaridad. Las referencias sin texto asociado se señalan; no se inventa una posición para ellas.
+Se eliminan referencias duplicadas y, de forma predeterminada, los demás textos asociados al símbolo (valores o nombres de dispositivo). Para conservar estos últimos, usa `pcbTextRemoveValues = nil`. No se borran textos independientes, dibujos del encapsulado ni marcas gráficas de polaridad. Las referencias sin texto asociado se señalan; `pcb_textos` no las crea. El comando separado `pcb_textos_recrear`, tras `pcb_textos_faltantes_auditar`, añade solo las ausentes, asociadas al símbolo en su origen y cara correcta. Requiere colocación manual. Omite textos homónimos existentes y símbolos fijos; no mueve ni borra texto y crea backup con transacción reversible.
 
 Cada conjunto de dimensiones obtiene su propio bloque de texto. Cambiar la configuración no altera bloques compartidos por otros textos del diseño.
 
@@ -31,23 +31,29 @@ En Allegro, las geometrías de soldermask representan **aberturas**. Los pads de
 
 La herramienta clona los padstacks necesarios dentro de la placa; no modifica la biblioteca `.pad`, las capas de pasta ni el cobre del pad. Comprueba que el resto de geometrías y atributos de taladro de cada clon coincidan. Ante un error durante la aplicación, revierte la transacción. Allegro puede recalcular los rellenos dinámicos: revisa sus DRC después.
 
-Compatible con geometrías simples circulares, cuadradas y rectangulares, pines SMD y taladros pasantes circulares. Los padstacks avanzados, ranuras, geometrías especiales, microvías y backdrilling requieren revisión específica. No se eliminan aperturas adicionales del encapsulado o de la placa. El informe detecta vías expuestas por otras aberturas; esas situaciones requieren revisión manual. La ausencia de abertura en el archivo no garantiza que el fabricante pueda cubrir físicamente cualquier diámetro de vía.
+Compatible con geometrías simples circulares, cuadradas y rectangulares, pines SMD y taladros pasantes circulares. Se aceptan sin cambios pads OBLONG_X/OBLONG_Y con cobre y máscara idénticos en figura, tamaño y desplazamiento, y margen cero. No se deduce contención de figuras especiales solo por sus cajas exteriores ni se reconstruyen o expanden padstacks de slots. Otros padstacks especiales, microvías y backdrilling requieren revisión específica. No se eliminan aperturas adicionales del encapsulado o de la placa. El informe detecta vías expuestas por otras aberturas; esas situaciones requieren revisión manual. La ausencia de abertura en el archivo no garantiza que el fabricante pueda cubrir físicamente cualquier diámetro de vía.
 
 ## Anchos y vías para el trazado
 
 Por defecto: señal **0,40 mm**, vía **0,60/0,30 mm**; alimentación **0,80 mm**, vía **0,80/0,40 mm**. La lista `pcbPowerNets` reconoce nombres completos, sin distinguir mayúsculas, inicialmente `+12V`, `-12V`, `0`, `GND`, `VCC`, `VDD`. Ajusta esta lista para cada esquema.
 
-Se crean los conjuntos físicos `PCB_SIGNAL` y `PCB_POWER`. La regla `DEFAULT` permanece intacta. Se conservan las reglas físicas especiales asignadas a redes o grupos ascendientes cuando `pcbPreserveCustomRules = t`. El comando informa de las redes omitidas. Puedes desactivar esta conservación deliberadamente en tu perfil para reemplazar sus asignaciones. Las otras clases de restricciones no se normalizan.
+Se crean los conjuntos físicos `PCB_SIGNAL` y `PCB_POWER`. La regla `DEFAULT` permanece intacta. Se conservan las reglas físicas especiales asignadas a redes o grupos ascendientes cuando `pcbPreserveCustomRules = t`. El comando informa de las redes omitidas, consulta el ancho mínimo/máximo real por capa de sus reglas y avisa de discrepancias, valores no verificables o varias asignaciones heredadas. Una asignación directa prevalece sobre las de grupos. Puedes desactivar esta conservación deliberadamente en tu perfil para reemplazar sus asignaciones. Las otras clases de restricciones no se normalizan.
 
 Los padstacks de vías incorporan sus diámetros en el nombre para permitir cambiar de perfil. Estas reglas **no redimensionan pistas ni vías ya colocadas** y no implican una comprobación eléctrica o térmica de esos anchos. Tras cambiar reglas, revisa Constraint Manager y los DRC.
+
+### Vías ya colocadas: corrección opcional
+
+`pcb_vias_auditar` no modifica el diseño. `pcb_vias_normalizar` sustituye únicamente vías circulares pasantes ordinarias, con backup y transacción reversible. Mide todas las capas y conserva red, posición, rotación, cara, rango de capas, propiedades y conexión a pistas. Reutiliza un padstack compatible admitido por la regla física; si una regla no permite el perfil, la vía se omite. No modifica reglas para forzar sustituciones.
+
+Se omiten pines, slots, vías fijas/de test, microvías, backdrill, taladros no convencionales, tolerancias especiales, geometrías auxiliares y herencia ambigua. Tras un cambio, `pcb_revision_actualizar` recalcula shapes y DRC con backup y debe ejecutarse antes de exportar en esa sesión. El número de DRC puede ser distinto de cero: requiere revisión humana. No se añaden rutas ni conexiones.
 
 ## Fabricación
 
 El exportador se limita a placas de **dos capas positivas llamadas TOP y BOTTOM**. Rechaza estructuras multicapa, nombres de cobre diferentes y planos negativos. Los otros comandos pueden usarse independientemente del exportador.
 
-Genera siete films: cobre superior e inferior, máscara superior e inferior, serigrafía superior e inferior y contorno. El contorno usa `BOARD GEOMETRY/DESIGN_OUTLINE`, configurable con `pcbFabOutlineLayer`. Al configurar se reemplazan los films de esos nombres; revisa los films propios que ya tenga la placa.
+Genera siete films: cobre superior e inferior, máscara superior e inferior, serigrafía superior e inferior y contorno. El contorno usa `BOARD GEOMETRY/DESIGN_OUTLINE`, configurable con `pcbFabOutlineLayer`. Al configurar se crea backup, se retiran todos los films adicionales y se crean o sustituyen los siete previstos. La transacción permite revertir un fallo y se verifica que nombres, capas, orientación y polaridad coincidan. Una segunda configuración idéntica no modifica nada.
 
-Salida: Gerber RS-274X métrico 5.5 y NC Drill Enhanced Excellon métrico absoluto 5.5, con PTH y NPTH combinados. Cada ejecución crea una carpeta y un ZIP numerados **dentro de la carpeta donde está guardado el `.brd`**, independientemente de la carpeta desde la que se inició Allegro:
+Salida: Gerber RS-274X métrico 5.5 y NC Drill Enhanced Excellon métrico absoluto 5.5, con PTH y NPTH circulares combinados. Si existen slots ovales, se añade NC Route en archivos `.rou` separados por metalización. Se valida la correspondencia entre los slots previstos y los recorridos lineales exportados. No se admiten rutas con arcos/compensación ni slots rectangulares. Cada ejecución crea una carpeta y un ZIP numerados **dentro de la carpeta donde está guardado el `.brd`**, independientemente de la carpeta desde la que se inició Allegro:
 
 ```text
 mi_proyecto/
@@ -64,11 +70,11 @@ mi_proyecto/
 
 Se selecciona la primera versión libre; no se sobrescriben carpetas ni ZIP anteriores. `pcbFabOutputSubdir` permite cambiar `Fabricacion` por otra subcarpeta relativa del proyecto; se rechazan rutas absolutas y componentes `..`. La antigua opción `pcbFabOutputRoot` ya no se usa. Si no puede localizarse la placa guardada, el comando pide guardarla y se detiene.
 
-El ZIP contiene los siete `.art`, todos los `.drl`, `LEEME_FABRICACION.txt`, un `manifest.json` con versión y sumas SHA-256, los registros en `informes/` y los parámetros y la configuración efectiva de las utilidades en `parametros/`. Se verifica la integridad de cada archivo comprimido. No se añaden bases de datos PCB, archivos temporales ni enlaces a carpetas externas al ZIP.
+El ZIP contiene los siete `.art`, todos los `.drl` y los `.rou` de slots, `LEEME_FABRICACION.txt`, un `manifest.json` con versión y sumas SHA-256, los registros en `informes/` y los parámetros y la configuración efectiva de las utilidades en `parametros/`. Se verifica la integridad de cada archivo comprimido. No se añaden bases de datos PCB, archivos temporales ni enlaces a carpetas externas al ZIP.
 
 La auditoría comprueba estructura y existencia de capas; **no certifica** conexiones, DRC, rellenos, contenido del contorno ni fabricabilidad. Antes de enviar, revisa los avisos de `photoplot.log` y `ncdrill.log` y comprueba los archivos en un visor CAM, especialmente contorno, taladros, máscara y serigrafía. Una placa con islas de tierra inconexas seguirá teniéndolas.
 
-El exportador devuelve la ruta del ZIP si los archivos están completos. Si Allegro emite avisos (código 1), también crea el ZIP, lo señala en consola y marca el manifiesto como `REQUIERE_REVISION_AVISOS`. Ante errores de exportación o archivos incompletos no crea un ZIP nuevo y conserva la carpeta para diagnosticar. `pcbFabLastResult` contiene `(carpeta resultadoGerber resultadoTaladro)` y `pcbFabLastZip` contiene el último ZIP de una exportación completada.
+El exportador devuelve la ruta del ZIP si los archivos están completos. Si Allegro emite avisos (código 1 o WARNING en los logs), también crea el ZIP, lo señala en consola y marca el manifiesto como `REQUIERE_REVISION_AVISOS`. Ante errores de exportación o archivos incompletos no crea un ZIP nuevo y conserva la carpeta para diagnosticar. `pcbFabLastResult` contiene `(carpeta resultadoGerber resultadoTaladro resultadoSlots)` y `pcbFabLastZip` contiene el último ZIP de una exportación completada.
 
 ## Proyecto autocontenido
 
@@ -87,3 +93,7 @@ Si una placa antigua conserva una regla `POWER_0P8`, el comando de anchos la con
 ## Validación y alcance
 
 Consulta [VALIDACION.md](VALIDACION.md). Se incluye [tests/smoke.il](tests/smoke.il) como prueba de integración para ejecutar **solo en copias desechables** dentro de Allegro. No se incluyen placas, bibliotecas personales ni archivos de fabricación de proyectos.
+
+## Carga y actualización durante una sesión
+
+El cargador compara ruta, versión y fechas de modificación de los módulos y del perfil local. Una carga sin cambios verifica los alias sin redefinir funciones ni reaplicar el perfil local. Archivos cambiados o una versión distinta provocan una carga completa. `pcb_recargar` fuerza la recarga de los módulos actuales, útil si se han conservado las fechas al copiar; para actualizar el propio cargador usa la línea de carga estándar de la guía. Los cambios no se aplican por sí solos a la PCB.

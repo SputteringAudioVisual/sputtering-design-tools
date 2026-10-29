@@ -24,9 +24,14 @@ procedure(pcbMaskContains(copper mask delta)
   prog((cb mb cx cy mx my cr mr dx dy ok)
     unless(pcbMaskHasFigure(mask) return(nil))
     cb = copper->bBox mb = mask->bBox
+    ; Equal extents alone do not prove containment for arbitrary figures.
+    ; Oblongs are accepted unchanged only when the named shape, dimensions
+    ; and offset are identical, with zero requested expansion.
     unless(member(copper->figureName '("CIRCLE" "SQUARE" "RECTANGLE")) &&
       member(mask->figureName '("CIRCLE" "SQUARE" "RECTANGLE"))
-      error("Figura especial: revisar mascara de %s" copper->parent->name))
+      return(delta==0.0 && member(copper->figureName '("OBLONG_X" "OBLONG_Y")) &&
+        equal(copper->figureName mask->figureName) &&
+        equal(copper->offset mask->offset) && equal(cb mb)))
     when(member(mask->figureName '("SQUARE" "RECTANGLE"))
       return(xCoord(car(mb)) <= xCoord(car(cb))-delta+0.0000001 &&
         yCoord(car(mb)) <= yCoord(car(cb))-delta+0.0000001 &&
@@ -350,7 +355,7 @@ procedure(pcbMaskApply()
       printf("PCB MASK: padstacks ya conformes. No se modifica nada.\n") return(t))
     original = pcbProyectoArchivo()
     carpeta = strcat(pcbProyectoDirectorio() "/Copias_seguridad")
-    unless(createDirHier(carpeta) error("No se pudo crear la carpeta de copias del proyecto."))
+    unless(isDir(carpeta) || createDirHier(carpeta) error("No se pudo crear la carpeta de copias del proyecto."))
     n = 1 backup = sprintf(nil "%s/%s_antes_mascara_v%03d.brd" carpeta pcbProyectoNombre() n)
     while(isFile(backup) n = n + 1 backup = sprintf(nil "%s/%s_antes_mascara_v%03d.brd" carpeta pcbProyectoNombre() n))
     anterior = getWorkingDir()

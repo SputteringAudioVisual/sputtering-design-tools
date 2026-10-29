@@ -1,5 +1,25 @@
 # Validación
 
+## Versión 0.3.0: revisión global antes de fabricar
+
+Prueba nativa en Allegro 17.2 P028 sobre una copia desechable con 303 pines, 10 vías y 15 slots ovales metalizados. La PCB original conserva su SHA-256 anterior a las pruebas.
+
+- Auditorías sin cambios: máscara OBLONG_X idéntica, vías medidas en todas las capas y ancho mínimo/máximo real de las reglas conservadas. Una regla de prueba con ancho incorrecto se detecta y su asignación se revierte.
+- Se sustituyen cuatro vías de alimentación de 0,60/0,30 a 0,80/0,40 mm mediante un padstack ya admitido por su regla. Se preservan red, posición, capas, propiedades y conexión a pistas; los pines y slots permanecen iguales.
+- Se recrean cuatro referencias ausentes en el origen de su símbolo. Las existentes se conservan; la posición final de las nuevas requiere revisión manual.
+- Fallos deliberados después de modificar vías, referencias y films: las tres operaciones revierten sus cambios. Los backups consecutivos funcionan con la carpeta ya existente y preservan la ruta de la placa activa.
+- La exportación se bloquea tras corregir vías hasta actualizar shapes y DRC. La revisión termina con cero shapes desactualizados y dos DRC de la placa, comunicados para revisión.
+- Se retiran TOP/BOTTOM antiguos y se comprueban exactamente siete films. Repetir vías, referencias, films y carga sin cambios no reaplica modificaciones.
+- El ZIP contiene siete Gerber, un NC Drill circular y un NC Route con 15 slots metalizados. Comprobación independiente CRC/SHA-256 y de las posiciones y dimensiones de los 15 slots: 2,20 × 1,10 mm.
+
+NC Drill puede terminar con éxito aunque omita los slots: el log indica que necesitan NC Route. La nueva validación detectó la ausencia de los 15 slots e impidió crear ese ZIP incompleto. Ahora se ejecuta `ncroute` y se verifica el recuento por metalización. Se detectan avisos WARNING en los logs aunque el proceso devuelva cero.
+
+Test nativo: [tests/regression_030.il](tests/regression_030.il), **`REGRESSION_030_ALL_PASS` / `RESULT (t)`**. Requiere una copia con al menos una vía incorrecta, una referencia ausente y un slot oval metalizado, y reglas conservadas acordes al perfil. Cárgalo tras cargar las utilidades y ejecuta `skill pcbRegressionRun()` solo sobre esa copia; genera backups, fabricación y `validated.brd`. No se distribuye ninguna placa personal.
+
+Pruebas de instalación y empaquetado: `python -m unittest discover -s tests -p 'test_*.py' -v` desde `allegro/`. Once casos cubren rutas con espacios/ñ, integridad, versiones protegidas, archivos ausentes/truncados, errores, slots ausentes, inclusión de NC Route por metalización y avisos escritos con estado cero.
+
+Límites: no se ha realizado inspección visual CAM ni fabricación física de esta versión, ni se han certificado todas las jerarquías de grupos y caras de componentes. La herencia ambigua se omite. Slots rectangulares, rutas con arcos/compensación y padstacks avanzados requieren un flujo específico. Estos ensayos no aprueban la PCB para fabricar.
+
 ## Versión 0.2.2: información directa en consola
 
 El usuario confirmó que `pcb_mascara_revisar` ya responde con 0.2.1, pero `pcb_utilidades_info` seguía sin mostrar salida en su sesión. La información utiliza ahora `axlUIWPrint(nil ...)`, que escribe directamente en la ventana principal sin depender del búfer de `printf`. Se incorpora el alias `pcb_info` y se conserva `pcb_utilidades_info`.

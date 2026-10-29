@@ -1,4 +1,5 @@
 ; Resolve project files from the SAVED BOARD, never from Allegro's launch cwd.
+unless(boundp('pcbReviewPendingFiles) pcbReviewPendingFiles=nil)
 procedure(pcbProyectoArchivo()
   prog((archivo)
     unless(axlDBGetDesign() error("PCB: no hay una placa abierta."))
@@ -23,6 +24,78 @@ procedure(pcbProyectoNombre()
   let((archivo)
     archivo=car(last(parseString(pcbProyectoArchivo() "/\\")))
     substring(archivo 1 strlen(archivo)-4)
+  )
+)
+
+; Snapshot of current memory. Never redirects the active drawing to a backup.
+procedure(pcbProyectoBackup(etiqueta)
+  prog((archivo carpeta n anterior resultado original)
+    original=pcbProyectoArchivo()
+    unless(rexMatchp("^[A-Za-z0-9_]+$" etiqueta) error("PCB: etiqueta de backup no valida."))
+    carpeta=pcbProyectoRutaSalida("Copias_seguridad")
+    unless(isDir(carpeta) || createDirHier(carpeta) error("PCB: no se pudo crear la carpeta de backups."))
+    n=1
+    archivo=sprintf(nil "%s/%s_antes_%s_v%03d.brd" carpeta pcbProyectoNombre() etiqueta n)
+    while(isFile(archivo)
+      n=n+1
+      archivo=sprintf(nil "%s/%s_antes_%s_v%03d.brd" carpeta pcbProyectoNombre() etiqueta n))
+    anterior=getWorkingDir()
+    resultado=errset(axlSaveDesign(?design archivo ?noMru t ?noConfirm t ?writeModel t) t)
+    changeWorkingDir(anterior)
+    unless(resultado && car(resultado) && equal(original pcbProyectoArchivo())
+      error("PCB: no se pudo crear el backup sin cambiar la placa activa."))
+    printf("PCB: backup %s\n" archivo)
+    return(archivo)
+  )
+)
+
+; Workers return a nonnegative count, or raise an error to roll back everything.
+procedure(pcbProyectoAplicar(etiqueta worker)
+  prog((backup tx resultado)
+    backup=pcbProyectoBackup(etiqueta)
+    tx=axlDBTransactionStart()
+    unless(tx error("PCB: no se pudo iniciar la transaccion."))
+    resultado=errset(apply(worker nil) t)
+    if(resultado && numberp(car(resultado)) && car(resultado)>=0 then
+      axlDBTransactionCommit(tx)
+      printf("PCB: %s terminado; cambios en memoria. Revisa y guarda la placa.\n" etiqueta)
+      return(car(resultado))
+    else
+      axlDBTransactionRollback(tx)
+      printf("PCB: %s cancelado y revertido. Backup: %s\n" etiqueta backup)
+      return(nil))
+  )
+)
+
+procedure(pcbRevisionPendiente(@optional marcar)
+  let((archivo)
+    unless(boundp('pcbReviewPendingFiles) pcbReviewPendingFiles=nil)
+    archivo=pcbProyectoArchivo()
+    when(marcar
+      unless(member(archivo pcbReviewPendingFiles)
+        pcbReviewPendingFiles=cons(archivo pcbReviewPendingFiles)))
+    member(archivo pcbReviewPendingFiles)
+  )
+)
+
+procedure(pcbRevisionWorker()
+  prog((shapes drc)
+    shapes=axlShapeDynamicUpdate(nil t)
+    unless(numberp(shapes) && shapes==0 && axlDBDynamicShapes(nil)==0
+      error("PCB: no se pudieron actualizar todos los rellenos."))
+    drc=axlDRCUpdate(t)
+    unless(numberp(drc) error("PCB: fallo al actualizar los DRC."))
+    printf("PCB: rellenos actualizados; DRC encontrados: %d. Revisa tambien conexiones y CAM.\n" drc)
+    return(drc)
+  )
+)
+
+procedure(pcbRevisionActualizar()
+  let((resultado)
+    resultado=pcbProyectoAplicar("revision" 'pcbRevisionWorker)
+    when(numberp(resultado)
+      pcbReviewPendingFiles=remove(pcbProyectoArchivo() pcbReviewPendingFiles))
+    resultado
   )
 )
 
