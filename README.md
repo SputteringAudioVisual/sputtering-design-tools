@@ -12,7 +12,7 @@ Esta incorporación establece el punto de partida del control de versiones. Toda
 
 La carpeta [allegro](allegro/README.md) incorpora comandos SKILL para Allegro PCB Editor 17.2: normalización de referencias de serigrafía, máscara de pines y vías, reglas de anchos y exportación de fabricación para placas de dos capas. Los nombres `pcb_*` y los perfiles configurables permiten usarlos en diferentes proyectos.
 
-**Empieza por la [guía de uso de Allegro](allegro/COMO_USAR.md)**: instalación y actualización, carga, comandos, configuración por proyecto, exportación de Gerber + NC Drill en ZIP con versión y solución de problemas. Versión actual: **0.2.2**.
+**Empieza por la [guía de uso de Allegro](allegro/COMO_USAR.md)**: instalación y actualización, carga, comandos, configuración por proyecto, exportación de Gerber + NC Drill en ZIP con versión y solución de problemas. Versión actual: **0.3.0**.
 
 La [referencia técnica](allegro/README.md) detalla los valores iniciales y las limitaciones; [VALIDACION.md](allegro/VALIDACION.md) recoge las pruebas y la confirmación en una sesión real. Una única implementación en `allegro/` sirve a todos los proyectos. El código del editor Gerber permanece intacto.
 

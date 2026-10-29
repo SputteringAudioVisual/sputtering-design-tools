@@ -43,22 +43,64 @@ try {
     foreach ($drill in $drills) {
         $content = [IO.File]::ReadAllText($drill.FullName)
         if ($content -notmatch '\AM48\s' -or $content -notmatch 'METRIC,' -or
-            $content -notmatch 'M30\s*\z') { throw "Invalid or incomplete NC Drill: $($drill.Name)" }
+            $content -notmatch 'M30\s*\z' -or $content -match 'G85') {
+            throw "Invalid or unsupported NC Drill: $($drill.Name)"
+        }
         $payload += [pscustomobject]@{ Path=$drill.FullName; Entry=$drill.Name }
     }
-    foreach ($file in @('photoplot.log','ncdrill.log','pcb_export_info.txt','art_param.txt','nc_param.txt','nc_tools_auto.txt','config_utilidades.il')) {
+    $expectedPlated = 0
+    $expectedNonplated = 0
+    if ($info.ContainsKey('expected_plated_slots') -and $info.ContainsKey('expected_nonplated_slots')) {
+        $expectedPlated = [int]$info.expected_plated_slots
+        $expectedNonplated = [int]$info.expected_nonplated_slots
+    }
+    $routedPlated = 0
+    $routedNonplated = 0
+    $routes = @(Get-ChildItem -LiteralPath $folder -Filter '*.rou' -File)
+    foreach ($route in $routes) {
+        if ($route.Name -notin @('PCB_SLOTS.rou','PCB_SLOTS_plated.rou')) {
+            throw "Unexpected separate routing file: $($route.Name)"
+        }
+        $content = [IO.File]::ReadAllText($route.FullName)
+        $starts = [regex]::Matches($content, '(?m)^M15\s*$').Count
+        $segments = [regex]::Matches($content, '(?m)^G01X-?\d+Y-?\d+\s*$').Count
+        if ($content -notmatch '\AM48\s' -or $content -notmatch 'METRIC,' -or
+            $content -notmatch '(?m)^G90\s*$' -or $content -notmatch 'M30\s*\z' -or
+            $content -match '(?m)^G0[23]|^G4[12]' -or $starts -ne $segments -or $starts -eq 0) {
+            throw "Invalid or unsupported slot routing: $($route.Name)"
+        }
+        if ($route.Name -eq 'PCB_SLOTS_plated.rou') { $routedPlated += $starts }
+        else { $routedNonplated += $starts }
+        $payload += [pscustomobject]@{ Path=$route.FullName; Entry=$route.Name }
+    }
+    if ($expectedPlated -lt 0 -or $expectedNonplated -lt 0 -or
+        $routedPlated -ne $expectedPlated -or $routedNonplated -ne $expectedNonplated) {
+        throw "Incomplete NC slots: expected $expectedPlated plated / $expectedNonplated nonplated; routed $routedPlated / $routedNonplated."
+    }
+    if (($expectedPlated + $expectedNonplated) -gt 0 -and
+        (!$info.ContainsKey('ncroute_status') -or $info.ncroute_status -notin @('0','1'))) {
+        throw 'Slot routing process failed or was not run.'
+    }
+    foreach ($file in @('photoplot.log','ncdrill.log','ncroute.log','ncroutebits_auto.txt','pcb_export_info.txt','art_param.txt','nc_param.txt','nc_tools_auto.txt','config_utilidades.il')) {
         $path = Join-Path $folder $file
         if (Test-Path -LiteralPath $path -PathType Leaf) {
             $prefix = if ($file -like '*.log') {'informes/'} else {'parametros/'}
             $payload += [pscustomobject]@{ Path=$path; Entry=($prefix + $file) }
         }
     }
-    $warnings = ($info.artwork_status -eq '1' -or $info.ncdrill_status -eq '1')
+    if (!$info.ContainsKey('ncroute_status')) { $info.ncroute_status = '0' }
+    $warnings = ($info.artwork_status -eq '1' -or $info.ncdrill_status -eq '1' -or $info.ncroute_status -eq '1')
+    foreach ($logName in @('photoplot.log','ncdrill.log','ncroute.log')) {
+        $logPath = Join-Path $folder $logName
+        if ((Test-Path -LiteralPath $logPath) -and [IO.File]::ReadAllText($logPath) -match '(?i)WARNING') { $warnings = $true }
+    }
     $manifest = [ordered]@{
         board=$boardName; fabrication_version=$version; tools_version=$info.tools_version
         created_utc=[DateTime]::UtcNow.ToString('o')
         status=$(if ($warnings) {'REQUIERE_REVISION_AVISOS'} else {'EXPORTADO_SIN_AVISOS'})
         artwork_status=[int]$info.artwork_status; ncdrill_status=[int]$info.ncdrill_status
+        ncroute_status=[int]$info.ncroute_status
+        slots=[ordered]@{ expected_plated=$expectedPlated; expected_nonplated=$expectedNonplated; routed_plated=$routedPlated; routed_nonplated=$routedNonplated }
         source='Current Allegro database in memory; no original PCB is included.'
         cam_review_required=$true
         files=@($payload | ForEach-Object {
@@ -71,10 +113,11 @@ try {
     $report = @(
         "Placa: $boardName", "Version de fabricacion: v$('{0:D3}' -f $version)",
         "Version de utilidades: $($info.tools_version)", "Estado: $($manifest.status)",
-        "Artwork: $($info.artwork_status); NC Drill: $($info.ncdrill_status) (0=sin avisos, 1=con avisos).",
+        "Procesos: Artwork $($info.artwork_status); NC Drill $($info.ncdrill_status); NC Route $($info.ncroute_status). Un estado cero no excluye avisos en los logs.",
         'Incluye Gerber RS-274X metricos 5.5 y NC Drill Excellon metrico.',
+        "Slots: $routedPlated metalizados y $routedNonplated no metalizados en archivos .rou (NC Route); NO estan en el .drl.",
         'Revisar siempre DRC y alineacion de capas/contorno/taladros en un visor CAM.',
-        'Los avisos figuran en informes/photoplot.log y en informes/ncdrill.log.',
+        'Los avisos figuran en informes/photoplot.log, ncdrill.log y ncroute.log (si hay slots).',
         'El paquete representa el estado en memoria al exportar; no certifica fabricabilidad.'
     )
     $reportPath = Join-Path $folder 'LEEME_FABRICACION.txt'

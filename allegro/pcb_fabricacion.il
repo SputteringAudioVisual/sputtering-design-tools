@@ -31,6 +31,21 @@ procedure(pcbFabCapas()
   )
 )
 
+; Count actual pin/via holes. DB spells the enum OVAL_SLOT as "OVAL SLOT".
+procedure(pcbFabRanuras()
+  let((plated nonPlated especiales ps tipo)
+    plated=0 nonPlated=0 especiales=0
+    foreach(item pcbMaskItems()
+      ps=car(item)->definition
+      tipo=if(stringp(ps->holeType) then buildString(parseString(upperCase(ps->holeType) " _") "_") else "")
+      when(equal(tipo "OVAL_SLOT")
+        if(equal(ps->plating "PLATED") then plated=plated+1 else nonPlated=nonPlated+1))
+      when(ps->isThrough && !member(tipo '("CIRCLE_DRILL" "OVAL_SLOT"))
+        especiales=especiales+1))
+    list(plated nonPlated especiales)
+  )
+)
+
 procedure(pcbFabNuevaCarpeta()
   let((base carpeta indice raiz partes nombre directorio char)
     nombre = pcbProyectoNombre()
@@ -100,7 +115,7 @@ procedure(pcbFabEscribirNcParam(carpeta)
       fprintf(puerto "LEADER                 12\n")
       fprintf(puerto "CODE                   ASCII\n")
       fprintf(puerto "SEPARATE               NO\n")
-      fprintf(puerto "SEPARATE-ROUTING       NO\n")
+      fprintf(puerto "SEPARATE-ROUTING       YES\n")
       fprintf(puerto "DRILLING               LAYER-PAIR\n")
       fprintf(puerto "BACKDRILL              NO\n")
       fprintf(puerto "CAVITY                 NO\n")
@@ -122,7 +137,7 @@ procedure(pcbFabEscribirNcParam(carpeta)
 )
 
 procedure(pcbFabAuditar()
-  prog((diseno films film capa faltan existentes)
+  prog((diseno films film capa faltan existentes actuales extras ranuras)
     diseno = axlDBGetDesign()
     if(diseno == nil then
       printf("\nPCB FAB: No hay ningun diseno abierto.\n")
@@ -149,6 +164,11 @@ procedure(pcbFabAuditar()
       )
       printf("\nPCB FAB: auditoria; no se ha modificado el diseno.\n")
       printf("PCB FAB: films previstos: %d\n" length(films))
+      actuales=axlGetParam("artwork")->groupMembers
+      extras=setof(nombre actuales !member(nombre foreach(mapcar entrada films car(entrada))))
+      printf("PCB FAB: films actuales: %d; adicionales a retirar al configurar: %L\n" length(actuales) extras)
+      printf("PCB FAB: rellenos fuera de fecha: %d; DRC registrados (pueden estar desactualizados): %d.\n"
+        axlDBDynamicShapes(nil) axlDRCGetCount())
       printf("PCB FAB: capas encontradas: %d\n" existentes)
       if(faltan then
         printf("PCB FAB: AVISO - capas ausentes: %L\n" reverse(faltan))
@@ -158,69 +178,83 @@ procedure(pcbFabAuditar()
       printf("PCB FAB: Gerber RS-274X metric 5.5.\n")
       printf("PCB FAB: NC Enhanced Excellon metric absolute 5.5.\n")
       printf("PCB FAB: PTH y NPTH se generan en un unico archivo.\n")
-      return(not(faltan))
+      ranuras=pcbFabRanuras()
+      printf("PCB FAB: slots ovales: %d metalizados; %d no metalizados; %d taladros especiales no admitidos.\n"
+        car(ranuras) cadr(ranuras) nth(2 ranuras))
+      return(!faltan && nth(2 ranuras)==0)
     )
+  )
+)
+
+procedure(pcbFabFilmsCorrectos()
+  let((nombres films correcto param)
+    films=pcbFabCapas()
+    nombres=axlGetParam("artwork")->groupMembers
+    correcto=length(nombres)==length(films)
+    foreach(film films
+      param=axlGetParam(strcat("artwork:" car(film)))
+      unless(member(car(film) nombres) && param &&
+        length(param->groupMembers)==length(cadr(film)) &&
+        !setof(capa cadr(film) !member(capa param->groupMembers)) &&
+        !param->negative && !param->mirrored && param->rotation==0 &&
+        equal(param->offset 0:0) && !param->drawHolesOnly && !param->suppressShapeFill
+        correcto=nil))
+    correcto
+  )
+)
+
+procedure(pcbFabConfigurarWorker()
+  let((films ancho nombres)
+    films=pcbFabCapas()
+    nombres=foreach(mapcar film films car(film))
+    foreach(nombre axlGetParam("artwork")->groupMembers
+      unless(member(nombre nombres)
+        unless(axlDeleteObject(axlGetParam(strcat("artwork:" nombre)))
+          error("PCB FAB: no se pudo retirar el film %s." nombre))
+        printf("PCB FAB: film antiguo retirado: %s.\n" nombre)))
+    ancho=axlMKSConvert(0.10 "millimeters" car(axlDBGetDesignUnits()))
+    foreach(film films
+      unless(axlFilmCreate(car(film)
+        ?negative nil ?undefineLineWidth ancho ?rotation 0 ?xOffset 0.0 ?yOffset 0.0
+        ?mirrored nil ?fullContact nil ?suppressUnconnectPads nil
+        ?drawMissingPadApertures t ?useApertureRotation t ?suppressShapeFill nil
+        ?vectorBasedPad nil ?drawHolesOnly nil ?layers cadr(film)
+        ?domains list("artwork" "visibility"))
+        error("PCB FAB: fallo creando film %s." car(film))))
+    unless(pcbFabFilmsCorrectos() error("PCB FAB: el conjunto final no coincide con los siete films previstos."))
+    printf("PCB FAB: exactamente siete films verificados; cambios en memoria.\n")
+    7
   )
 )
 
 procedure(pcbFabConfigurar()
-  let((diseno films film ancho resultado)
-    diseno = axlDBGetDesign()
-    if(diseno == nil then
-      printf("\nPCB FAB: No hay ningun diseno abierto.\n")
-      nil
-    else
-      if(not(pcbFabAuditar()) then
-        printf("PCB FAB: configuracion cancelada porque faltan capas.\n")
-        nil
-      else
-        ancho = axlMKSConvert(0.10 "millimeters" car(axlDBGetDesignUnits()))
-        resultado = t
-        films = pcbFabCapas()
-        foreach(film films
-          unless(axlFilmCreate(car(film)
-            ?negative nil
-            ?undefineLineWidth ancho
-            ?rotation 0
-            ?xOffset 0.0
-            ?yOffset 0.0
-            ?mirrored nil
-            ?fullContact nil
-            ?suppressUnconnectPads nil
-            ?drawMissingPadApertures t
-            ?useApertureRotation t
-            ?suppressShapeFill nil
-            ?vectorBasedPad nil
-            ?drawHolesOnly nil
-            ?layers cadr(film)
-            ?domains list("artwork" "visibility"))
-            resultado = nil
-            printf("PCB FAB: ERROR creando film %s.\n" car(film))
-          )
-        )
-        if(resultado then
-          printf("\nPCB FAB: siete films configurados correctamente.\n")
-          printf("PCB FAB: el diseno NO se ha guardado.\n")
-        )
-        resultado
-      )
-    )
+  prog(()
+    unless(pcbFabAuditar() return(nil))
+    when(pcbFabFilmsCorrectos()
+      printf("PCB FAB: los siete films ya coinciden; no se cambia nada.\n")
+      return(t))
+    return(numberp(pcbProyectoAplicar("films" 'pcbFabConfigurarWorker)))
   )
 )
 
 procedure(pcbFabExportarWorker()
-  let((formatoArt resultadoArt resultadoNc)
+  let((formatoArt resultadoArt resultadoNc resultadoRoute ranuras)
     formatoArt = "artwork -f COPPER_BOTTOM -f COPPER_TOP -f MASK_BOTTOM -f MASK_TOP -f OUTLINE -f SILK_BOTTOM -f SILK_TOP %s"
     resultadoArt = axlRunBatchDBProgram("artwork" formatoArt
       ?logfile "photoplot" ?startMsg "PCB Gerber RS-274X" ?warnProgram t)
     resultadoNc = axlRunBatchDBProgram("nctape" "nctape -o -n PCB_DRILL.drl %s"
       ?logfile "ncdrill" ?startMsg "PCB NC Drill" ?warnProgram t)
-    list(resultadoArt resultadoNc)
+    ranuras=pcbFabRanuras()
+    resultadoRoute=t
+    when(car(ranuras)+cadr(ranuras)>0
+      resultadoRoute=axlRunBatchDBProgram("ncroute" "ncroute -o PCB_SLOTS.rou %s"
+        ?logfile "ncroute" ?startMsg "PCB NC Route slots" ?warnProgram t))
+    list(resultadoArt resultadoNc resultadoRoute)
   )
 )
 
 procedure(pcbFabComprimir(carpeta estados)
-  prog((f helper comando previo resultado ejecutable)
+  prog((f helper comando previo resultado ejecutable ranuras)
     helper=strcat(pcbToolsRoot "/pcb_empaquetar.ps1")
     unless(isFile(helper) error("PCB: falta el empaquetador %s." helper))
     when(rexMatchp("[\"%]" helper) error("PCB: ruta del empaquetador no compatible."))
@@ -229,6 +263,9 @@ procedure(pcbFabComprimir(carpeta estados)
     fprintf(f "tools_version=%s\n" pcbToolsVersion)
     fprintf(f "artwork_status=%d\n" if(car(estados)==t then 0 else car(estados)))
     fprintf(f "ncdrill_status=%d\n" if(cadr(estados)==t then 0 else cadr(estados)))
+    fprintf(f "ncroute_status=%d\n" if(nth(2 estados)==t then 0 else nth(2 estados)))
+    ranuras=pcbFabRanuras()
+    fprintf(f "expected_plated_slots=%d\nexpected_nonplated_slots=%d\n" car(ranuras) cadr(ranuras))
     close(f)
     ejecutable=strcat(getShellEnvVar("SystemRoot") "/System32/WindowsPowerShell/v1.0/powershell.exe")
     ; system waits for this non-Cadence process and preserves its exit code.
@@ -253,6 +290,9 @@ procedure(pcbFabExportar()
     pcbFabLastZip = nil
     ; Resolve and validate the saved project before changing films or writing.
     pcbProyectoRutaSalida(pcbFabOutputSubdir)
+    when(axlDBDynamicShapes(nil)>0 || pcbRevisionPendiente()
+      printf("PCB FAB: exportacion detenida: recalcula y revisa rellenos/DRC con pcb_revision_actualizar.\n")
+      return(nil))
     unless(pcbFabConfigurar() return(nil))
     carpeta = pcbFabNuevaCarpeta()
     unless(carpeta error("No se pudo crear la carpeta de salida."))
@@ -271,19 +311,32 @@ procedure(pcbFabExportar()
     printf("PCB FAB: salida %s\n" carpeta)
     unless(resultado printf("PCB FAB: ERROR de exportacion; revisa los logs.\n") return(nil))
     estados = car(resultado)
-    pcbFabLastResult = list(carpeta car(estados) cadr(estados))
-    unless(member(car(estados) '(t 1)) && member(cadr(estados) '(t 1))
-      printf("PCB FAB: ERROR Gerber %L; taladro %L. No se crea un ZIP de fabricacion.\n" car(estados) cadr(estados))
+    pcbFabLastResult = list(carpeta car(estados) cadr(estados) nth(2 estados))
+    unless(member(car(estados) '(t 1)) && member(cadr(estados) '(t 1)) && member(nth(2 estados) '(t 1))
+      printf("PCB FAB: ERROR Gerber %L; taladro %L; slots %L. No se crea ZIP.\n" car(estados) cadr(estados) nth(2 estados))
       return(nil))
     zip=pcbFabComprimir(carpeta estados)
     unless(zip return(nil))
     pcbFabLastZip=zip
     printf("PCB FAB: ZIP %s\n" zip)
-    if(car(estados)==t && cadr(estados)==t then
+    if(car(estados)==t && cadr(estados)==t && nth(2 estados)==t && !pcbFabLogsConAvisos(carpeta) then
       printf("PCB FAB: procesos finalizados sin avisos. Comprueba el paquete en un visor CAM.\n")
     else
-      printf("PCB FAB: PAQUETE CON AVISOS: Gerber %L; taladro %L. Revisa el informe dentro del ZIP.\n" car(estados) cadr(estados)))
+      printf("PCB FAB: PAQUETE CON AVISOS: Gerber %L; taladro %L; slots %L. Revisa logs e informe del ZIP.\n" car(estados) cadr(estados) nth(2 estados)))
     return(zip)
+  )
+)
+
+procedure(pcbFabLogsConAvisos(carpeta)
+  let((f linea avisos)
+    foreach(nombre '("photoplot.log" "ncdrill.log" "ncroute.log")
+      when(isFile(strcat(carpeta "/" nombre))
+        f=infile(strcat(carpeta "/" nombre))
+        when(f
+          while(gets(linea f)
+            when(rexMatchp("WARNING" upperCase(linea)) avisos=t))
+          close(f))))
+    avisos
   )
 )
 
