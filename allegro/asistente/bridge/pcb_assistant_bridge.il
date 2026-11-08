@@ -1,0 +1,174 @@
+; Optional external assistant bridge. Existing pcb_* utilities are not modified.
+; ASCII source, cp1252 data. No eval / evalstring / request-supplied code.
+unless(boundp('pcbwaTimer) pcbwaTimer=nil)
+unless(boundp('pcbwaPending) pcbwaPending=nil)
+unless(boundp('pcbwaSeen) pcbwaSeen=nil)
+
+procedure(pcbwaLine(f)
+  let((line parts)
+    unless(gets(line f) error("PCB ASISTENTE: solicitud incompleta."))
+    parts=parseString(line "\r\n")
+    unless(length(parts)==1 error("PCB ASISTENTE: campo vacio o invalido."))
+    car(parts)))
+
+procedure(pcbwaBoard()
+  let((name)
+    name=axlGetDrawingName()
+    when(name
+      unless(rexMatchp("\\.[bB][rR][dD]$" name) name=strcat(name ".brd")))
+    name))
+
+procedure(pcbwaHeartbeat()
+  let((f)
+    f=outfile(strcat(pcbwaRoot "/heartbeat.tsv"))
+    when(f
+      fprintf(f "token\t%s\nboard\t%s\n" pcbwaToken or(pcbwaBoard() "-"))
+      close(f))))
+
+procedure(pcbwaTimerCB(window timer elapsed)
+  ; Timer only updates a short heartbeat and posts a command. Never saves,
+  ; modifies a board, opens forms or keeps database ids across callbacks.
+  pcbwaHeartbeat()
+  when(!pcbwaPending && isFile(strcat(pcbwaRoot "/request.tsv"))
+    pcbwaPending=t
+    axlShellPost("pcbwa_dispatch")))
+
+procedure(pcbwaStart(folder token core)
+  prog(()
+  ; Deliberately not autoloaded by pcb_cargar.il or allegro.ilinit.
+  unless(rexMatchp("^[a-f0-9]+$" token) error("PCB ASISTENTE: token invalido."))
+  when(pcbwaTimer axlUIWTimerRemove(pcbwaTimer))
+  pcbwaTimer=nil
+  pcbwaPending=nil
+  pcbwaRoot=folder pcbwaToken=token pcbwaSeen=nil pcbwaSnapshotJob=nil
+  unless(isDir(folder) error("PCB ASISTENTE: carpeta de sesion inexistente."))
+  unless(isFile(strcat(core "/pcb_cargar.il")) error("PCB ASISTENTE: no se encuentran las utilidades."))
+  load(strcat(core "/pcb_cargar.il"))
+  unless(boundp('pcbToolsVersion) && equal(pcbToolsVersion "0.3.0")
+    error("PCB ASISTENTE: esta beta requiere utilidades 0.3.0."))
+  axlCmdRegister("pcbwa_dispatch" 'pcbwaDispatch ?cmdType "interactive")
+  pcbwaHeartbeat()
+  pcbwaTimer=axlUIWTimerAdd(nil 1000 nil 'pcbwaTimerCB)
+  unless(pcbwaTimer error("PCB ASISTENTE: no se pudo iniciar la conexion."))
+  printf("PCB ASISTENTE: conectado. Las operaciones se solicitan desde la ventana externa.\n")
+  return(t)))
+
+procedure(pcbwaStop()
+  when(pcbwaTimer axlUIWTimerRemove(pcbwaTimer))
+  pcbwaTimer=nil pcbwaPending=nil
+  t)
+
+procedure(pcbwaCollect(f)
+  prog((design placed unplaced missing mask)
+    design=axlDBGetDesign()
+    unless(design error("PCB ASISTENTE: no hay placa abierta."))
+    placed=0 unplaced=0
+    foreach(c design->components
+      if(c->symbol then placed=placed+1 else unplaced=unplaced+1))
+    missing=pcbSilkFaltantesAuditar()
+    mask=pcbMaskAudit()
+    unless(listp(mask) && length(mask)==6 error("PCB ASISTENTE: auditoria de mascara incompleta."))
+    fprintf(f "placed\t%d\nunplaced\t%d\nmissing\t%d\n" placed unplaced car(missing))
+    fprintf(f "drc\t%L\nshapes\t%L\n" axlDRCGetCount() axlDBDynamicShapes(nil))
+    fprintf(f "mask_pins\t%d\nmask_vias\t%d\nmask_extras\t%d\nmask_conflicts\t%d\n"
+      nth(2 mask) nth(3 mask) nth(4 mask) nth(5 mask))
+    foreach(net design->nets fprintf(f "net\t%s\n" net->name))
+    fprintf(f "core\t%s\nsignal_mm\t%.3f\npower_mm\t%.3f\n" pcbToolsVersion pcbSignalWidthMM pcbPowerWidthMM)
+    fprintf(f "power_nets\t%s\n" buildString(pcbPowerNets "|"))
+    return(list(unplaced car(missing) mask))))
+
+procedure(pcbwaDo(action nets signal power ticket job f)
+  prog((result snapshot checks mask)
+    case(action
+      ("inspect"
+        pcbSilkAuditar() pcbAnchosAuditar() pcbFabAuditar())
+      ("widths"
+        unless(rexMatchp("^[0-9.]+$" signal) && rexMatchp("^[0-9.]+$" power)
+          error("PCB ASISTENTE: anchos no validos."))
+        unless(atof(signal)>=0.1 && atof(signal)<=10.0 && atof(power)>=0.1 && atof(power)<=10.0
+          error("PCB ASISTENTE: anchos fuera de rango."))
+        pcbwaSnapshotJob=nil
+        pcbPowerNets=if(equal(nets "-") then nil else parseString(nets "|"))
+        pcbSignalWidthMM=atof(signal) pcbPowerWidthMM=atof(power)
+        unless(pcbAplicarAnchos() error("PCB ASISTENTE: no se aplicaron los anchos.")))
+      ("mask"
+        pcbwaSnapshotJob=nil
+        unless(pcbMaskApply() error("PCB ASISTENTE: no se aplico la mascara.")))
+      ("references"
+        pcbwaSnapshotJob=nil
+        result=pcbSilkRecrear()
+        unless(result error("PCB ASISTENTE: no se recuperaron las referencias.")))
+      ("review"
+        pcbwaSnapshotJob=nil
+        result=pcbRevisionActualizar()
+        unless(numberp(result) error("PCB ASISTENTE: revision fallida."))
+        fprintf(f "fresh_drc\t%L\n" result))
+      ("snapshot"
+        snapshot=pcbProyectoBackup("asistente_verificacion")
+        pcbwaSnapshotJob=job
+        fprintf(f "snapshot\t%s\n" snapshot))
+      ("save"
+        pcbwaSnapshotJob=nil
+        pcbProyectoBackup("asistente_guardar")
+        unless(axlSaveDesign(?noConfirm t) error("PCB ASISTENTE: no se guardo la placa.")))
+      ("export"
+        unless(pcbwaSnapshotJob && equal(ticket pcbwaSnapshotJob)
+          error("PCB ASISTENTE: falta comprobar una copia guardada reciente."))
+        ; Always refresh DRC and shapes again, even if the UI has a prior result.
+        unless(pcbRevisionActualizar()==0 error("PCB ASISTENTE: quedan DRC o fallo la revision."))
+        checks=pcbwaCollect(f) mask=nth(2 checks)
+        unless(car(checks)==0 && cadr(checks)==0 &&
+          nth(2 mask)==0 && nth(3 mask)==0 && nth(4 mask)==0 && nth(5 mask)==0
+          error("PCB ASISTENTE: quedan componentes, referencias o mascara por revisar."))
+        pcbwaSnapshotJob=nil
+        result=pcbFabExportar()
+        unless(result error("PCB ASISTENTE: no se genero el paquete."))
+        fprintf(f "zip\t%s\n" result)
+        fprintf(f "warnings\t%s\n" if(pcbFabLogsConAvisos(car(pcbFabLastResult)) then "1" else "0")))
+      (t error("PCB ASISTENTE: accion no permitida.")))
+    unless(equal(action "export") pcbwaCollect(f))
+    return(t)))
+
+procedure(pcbwaDispatch()
+  prog((request magic token job action board nets signal power ticket extra
+        f log oldPo oldErr result output)
+    pcbwaPending=t
+    request=infile(strcat(pcbwaRoot "/request.tsv"))
+    unless(request pcbwaPending=nil return(nil))
+    result=errset(list(pcbwaLine(request) pcbwaLine(request) pcbwaLine(request)
+      pcbwaLine(request) pcbwaLine(request) pcbwaLine(request) pcbwaLine(request)
+      pcbwaLine(request) pcbwaLine(request)) t)
+    extra=gets(extra request)
+    close(request)
+    deleteFile(strcat(pcbwaRoot "/request.tsv"))
+    unless(result && !extra pcbwaPending=nil return(nil))
+    result=car(result)
+    magic=nth(0 result) token=nth(1 result) job=nth(2 result) action=nth(3 result)
+    board=nth(4 result) nets=nth(5 result) signal=nth(6 result) power=nth(7 result) ticket=nth(8 result)
+    unless(equal(magic "PCBWA1") && equal(token pcbwaToken) &&
+      strlen(job)==32 && rexMatchp("^[a-f0-9]+$" job) &&
+      member(action '("inspect" "widths" "mask" "references" "review" "snapshot" "save" "export"))
+      pcbwaPending=nil return(nil))
+    when(member(job pcbwaSeen) || isFile(strcat(pcbwaRoot "/" job ".result.tsv"))
+      pcbwaPending=nil return(nil))
+    pcbwaSeen=cons(job pcbwaSeen)
+    output=strcat(pcbwaRoot "/" job ".result.tsv")
+    f=outfile(output)
+    log=outfile(strcat(pcbwaRoot "/" job ".log"))
+    unless(f && log
+      when(f close(f)) when(log close(log)) pcbwaPending=nil return(nil))
+    fprintf(f "id\t%s\ntoken\t%s\naction\t%s\nboard\t%s\n" job token action or(pcbwaBoard() "-"))
+    oldPo=poport oldErr=errport
+    poport=log errport=log
+    result=errset(
+      if(equal(lowerCase(board) lowerCase(or(pcbwaBoard() "-"))) then
+        pcbwaDo(action nets signal power ticket job f)
+      else error("PCB ASISTENTE: la placa activa no coincide. No se ejecuta la operacion.")) t)
+    poport=oldPo errport=oldErr
+    close(log)
+    fprintf(f "status\t%s\ncomplete\t1\n" if(result && car(result) then "ok" else "error"))
+    close(f)
+    pcbwaPending=nil
+    pcbwaHeartbeat()
+    printf("PCB ASISTENTE: %s, %s.\n" action if(result && car(result) then "terminado" else "revisar error"))
+    return(t)))
