@@ -22,7 +22,7 @@ procedure(pcbwaHeartbeat()
   let((f)
     f=outfile(strcat(pcbwaRoot "/heartbeat.tsv"))
     when(f
-      fprintf(f "token\t%s\nboard\t%s\nprotocol\t3\n" pcbwaToken or(pcbwaBoard() "-"))
+      fprintf(f "token\t%s\nboard\t%s\nprotocol\t4\n" pcbwaToken or(pcbwaBoard() "-"))
       close(f))))
 
 procedure(pcbwaTimerCB(window timer elapsed)
@@ -97,6 +97,7 @@ procedure(pcbwaCollect(f)
       nth(2 mask) nth(3 mask) nth(4 mask) nth(5 mask))
     foreach(net design->nets fprintf(f "net\t%s\n" net->name))
     fprintf(f "core\t%s\nsignal_mm\t%.3f\npower_mm\t%.3f\n" pcbToolsVersion pcbSignalWidthMM pcbPowerWidthMM)
+    fprintf(f "allegro_version\t%s\n" or(axlVersion('fullVersion) "unknown"))
     fprintf(f "power_nets\t%s\n" buildString(pcbPowerNets "|"))
     return(list(unplaced car(missing) mask missingRefs connectivity))))
 
@@ -157,6 +158,14 @@ procedure(pcbwaDo(action nets signal power ticket job f checkTexts excluded waiv
           pcbwaAllowed("mask_pins" nth(2 mask) waivers) && pcbwaAllowed("mask_vias" nth(3 mask) waivers) &&
           pcbwaAllowed("mask_extras" nth(4 mask) waivers) && pcbwaAllowed("mask_conflicts" nth(5 mask) waivers)
           error("PCB ASISTENTE: hay avisos nuevos o todavia no aceptados. Repite la comprobacion final."))
+        ; Snapshot and Gerber generation execute in this same native command.
+        ; This is the exact memory source, independent of the saved BRD name.
+        ; Configure films BEFORE the snapshot. The exporter then sees the
+        ; existing seven correct films and performs an idempotent no-op.
+        unless(pcbFabConfigurar() error("PCB ASISTENTE: no se pudieron preparar los films."))
+        snapshot=pcbProyectoBackup("release_origen")
+        fprintf(f "source_snapshot\t%s\n" snapshot)
+        fprintf(f "source_films\t%d\n" length(axlGetParam("artwork")->groupMembers))
         pcbwaSnapshotJob=nil
         result=pcbFabExportar()
         unless(result error("PCB ASISTENTE: no se genero el paquete."))
@@ -184,7 +193,7 @@ procedure(pcbwaDispatch()
     magic=nth(0 result) token=nth(1 result) job=nth(2 result) action=nth(3 result)
     board=nth(4 result) nets=nth(5 result) signal=nth(6 result) power=nth(7 result) ticket=nth(8 result)
     checkTexts=nth(9 result) excluded=nth(10 result) waivers=nth(11 result)
-    unless(equal(magic "PCBWA3") && equal(token pcbwaToken) && member(checkTexts '("0" "1")) &&
+    unless(equal(magic "PCBWA4") && equal(token pcbwaToken) && member(checkTexts '("0" "1")) &&
       strlen(job)==32 && rexMatchp("^[a-f0-9]+$" job) &&
       member(action '("inspect" "widths" "mask" "references" "review" "snapshot" "save" "export"))
       pcbwaPending=nil return(nil))

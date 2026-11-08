@@ -17,6 +17,8 @@ from saved_board import verify_snapshot
 from package_report import annotate_package, latest_export, remember_export
 from transport import Mailbox, append_history, skill_string
 from workflow import VERSION, STEPS, ExportPolicy, Profile, Workflow, project_history
+from traceability import (association_status, available_projects, bind_board, compare_releases, digest,
+                          fail_release, load_binding, local, now, releases, reserve_release, seal_release)
 
 HERE = Path(__file__).resolve().parent
 CORE = Path("C:/SPB_Data/pcbenv/pcb_tools")
@@ -47,6 +49,9 @@ class Assistant(tk.Tk):
         self.poll_error = None
         self.action_buttons = []
         self.export_record = None
+        self.project_binding = None
+        self.release_reservation = None
+        self.identity_var = tk.StringVar(value="Placa sin identidad/revisión declarada; los ZIP antiguos se conservan.")
         self.check_text_var = tk.BooleanVar(value=True)
         self.excluded_var = tk.StringVar(value="")
         self.technical_var = tk.BooleanVar(value=False)
@@ -85,6 +90,7 @@ class Assistant(tk.Tk):
         style.configure("Primary.TButton", background=BLUE, foreground=WHITE)
         style.map("Primary.TButton", background=[("active", "#1647b0"), ("disabled", "#b6c1d4")])
         style.configure("TCheckbutton", background=WHITE, foreground=INK, padding=6)
+        style.configure("Treeview", rowheight=int(27 * self.dpi_scale))
 
     def _layout(self):
         top = tk.Frame(self, bg=INK, padx=24, pady=18)
@@ -96,6 +102,11 @@ class Assistant(tk.Tk):
         bar.pack(fill="x")
         ttk.Label(bar, textvariable=self.board_var, wraplength=780).pack(side="left", fill="x", expand=True)
         ttk.Label(bar, textvariable=self.connection_var, foreground=BLUE).pack(side="right", padx=(14, 0))
+        identity_bar = ttk.Frame(self, padding=(24, 0, 24, 8))
+        identity_bar.pack(fill="x")
+        ttk.Label(identity_bar, textvariable=self.identity_var, wraplength=780).pack(side="left", fill="x", expand=True)
+        ttk.Button(identity_bar, text="Placa y revisión…", command=self.edit_identity).pack(side="right", padx=(8, 0))
+        ttk.Button(identity_bar, text="Liberaciones…", command=self.show_releases).pack(side="right")
         body = ttk.Frame(self, padding=(18, 0, 18, 8))
         body.pack(fill="both", expand=True)
         self.nav = tk.Frame(body, bg=BG, width=int(225 * self.dpi_scale))
@@ -376,6 +387,7 @@ class Assistant(tk.Tk):
         self.placement_var.set(False)
         self.cam_var.set(False)
         self.set_export_path(latest_export(path))
+        self.refresh_identity()
         profile_path = project_history(path) / "perfil.json"
         try:
             profile = Profile(**json.loads(profile_path.read_text(encoding="utf-8"))).validate()
@@ -462,9 +474,11 @@ class Assistant(tk.Tk):
             self.logged_pending = False
             self.write(f"Enviado a Allegro: {action}. Esperando el resultado; no se repetirá el comando.")
             self.refresh_buttons()
+            return True
         except (ValueError, OSError, UnicodeError) as exc:
             self.finalizing = False
             messagebox.showerror("No se ha ejecutado la operación", str(exc))
+            return False
 
     def confirmations(self):
         if self.flow:
@@ -490,9 +504,18 @@ class Assistant(tk.Tk):
             if blockers:
                 self.write("Antes de exportar:\n• " + "\n• ".join(blockers))
                 return
+            self.refresh_identity()
+            if not self.project_binding:
+                self.notice_var.set("Declara la identidad y revisión PCB antes de crear una liberación nueva.")
+                self.edit_identity()
+                return
             self.export_record = self.flow.export_record()
-            self.run("export")
-        except ValueError as exc:
+            self.export_record.update(profile=vars(self.flow.profile), saved_board_sha256_at_submit=digest(self.flow.board),
+                                      saved_board_observed_utc=now())
+            self.release_reservation = reserve_release(self.flow.board, self.project_binding)
+            if not self.run("export"):
+                fail_release(self.release_reservation, "La operación no llegó a enviarse.")
+        except (OSError, ValueError) as exc:
             messagebox.showerror("Perfil", str(exc))
 
     def refresh_buttons(self):
@@ -547,11 +570,13 @@ class Assistant(tk.Tk):
 
     def receive(self, action, result):
         self.flow.accept(action, result)
-        append_history(project_history(self.flow.board), {"time": time.time(), **result})
+        append_history(project_history(self.flow.board), {"time": time.time(), **result, "action": "export_generated" if action == "export" else action})
         self.write(result.get("log", "") + f"\nResultado de {action}: {result['status']}.")
         if result["status"] != "ok":
             self.flow.invalidate()
             self.finalizing = False
+            if action == "export":
+                fail_release(self.release_reservation, result.get("log", "Error de generación"))
             self.notice_var.set("La operación no terminó. Consulta «Ver detalle técnico» para ver el error.")
             self.refresh_findings()
             return
@@ -581,18 +606,145 @@ class Assistant(tk.Tk):
         elif action == "review" and self.finalizing:
             self.run("snapshot")
         elif action == "export":
-            self.set_export_path(result.get("zip"))
             try:
+                entry = seal_release(result["zip"], self.export_record, self.release_reservation, result["source_snapshot"])
                 remember_export(self.flow.board, result["zip"])
-                annotate_package(result["zip"], self.export_record)
-                self.notice_var.set("ZIP generado. Las opciones y los avisos aceptados están incluidos en el informe del paquete.")
+                self.set_export_path(result["zip"])
+                append_history(project_history(self.flow.board), {"time": time.time(), "action": "export", "status": "ok", "zip": result["zip"],
+                                                                 "fabrication_release_id": entry["fabrication_release_id"], "release_label": entry["release_label"]})
+                self.notice_var.set(f"{entry['release_label']} sellada · PCB {entry['pcb_revision']}. Informes y procedencia incluidos en el ZIP.")
+                self.refresh_identity()
             except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
-                self.notice_var.set("ZIP generado; falta incorporar el informe del asistente. Consulta el detalle técnico.")
-                self.write("No se incorporó el informe de decisiones: " + str(exc))
+                fail_release(self.release_reservation, str(exc))
+                self.notice_var.set("Generación sin sellar. Consulta el detalle; no se ha registrado como liberación final.")
+                self.write("No se selló la liberación: " + str(exc))
+                self.flow.state["status"] = "error"
+                return
             self.write("Paquete generado: " + result.get("zip", "(ver informe)") +
                        ("\nHay avisos: revisa logs e informe del ZIP." if result.get("warnings") != "0" else "\nAbre el ZIP en tu visor CAM antes de fabricar."))
         if action != "export":
             self.refresh_findings()
+
+    def refresh_identity(self):
+        if not self.flow:
+            return
+        try:
+            self.project_binding = load_binding(self.flow.board)
+            if self.project_binding:
+                binding = self.project_binding
+                self.identity_var.set(f"{binding['project_name']} · PCB {binding['pcb_revision']} · " + association_status(self.flow.board, binding))
+            else:
+                self.identity_var.set("Sin identidad/revisión PCB declarada · ZIP anteriores: históricos sin asociación nueva.")
+        except (OSError, ValueError, KeyError) as exc:
+            self.project_binding = None
+            self.identity_var.set("Revisar identidad: " + str(exc))
+
+    def edit_identity(self):
+        if not self.flow or self.demo:
+            return
+        if self.task or (self.mailbox and self.mailbox.pending):
+            messagebox.showinfo("Operación pendiente", "Espera a que termine antes de cambiar la revisión.")
+            return
+        self.refresh_identity()
+        dialog = tk.Toplevel(self)
+        dialog.title("Identidad y revisión de esta placa")
+        dialog.transient(self)
+        dialog.grab_set()
+        frame = ttk.Frame(dialog, padding=24)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="Una placa física mantiene su identidad aunque cambie el nombre del archivo.", wraplength=640).pack(anchor="w", pady=8)
+        projects = available_projects(self.flow.board)
+        labels = ["Nueva identidad de placa"] + [f"{item['project_name']} ({item['project_id'][:8]})" for item in projects]
+        selected = tk.StringVar(value=labels[0])
+        name = tk.StringVar(value=self.project_binding["project_name"] if self.project_binding else Path(self.flow.board).stem)
+        revision = tk.StringVar(value=self.project_binding["pcb_revision"] if self.project_binding else "")
+        note = tk.StringVar()
+        if self.project_binding:
+            for index, item in enumerate(projects, 1):
+                if item["project_id"] == self.project_binding["project_id"]:
+                    selected.set(labels[index])
+        ttk.Combobox(frame, textvariable=selected, values=labels, state="readonly", width=70).pack(fill="x", pady=5)
+        for label, variable in (("Nombre de la placa", name), ("Revisión PCB (MAYOR.MENOR, por ejemplo 1.0)", revision), ("Motivo de la declaración o cambio", note)):
+            ttk.Label(frame, text=label).pack(anchor="w", pady=(8, 2))
+            ttk.Entry(frame, textvariable=variable).pack(fill="x")
+        ttk.Label(frame, text="Cobre, circuito, taladros, contorno o colocación: mayor (1.0 → 2.0). Solo serigrafía/documentación: menor (1.0 → 1.1). Reexportar no cambia la revisión. No se atribuyen datos a ZIP antiguos.", wraplength=640).pack(anchor="w", pady=14)
+        def save():
+            try:
+                index = labels.index(selected.get())
+                identifier = projects[index - 1]["project_id"] if index else None
+                self.project_binding = bind_board(self.flow.board, name.get(), revision.get().strip(), identifier, note.get())
+                self.refresh_identity()
+                self.set_export_path(latest_export(self.flow.board))
+                dialog.destroy()
+            except (OSError, ValueError, KeyError) as exc:
+                messagebox.showerror("Identidad", str(exc), parent=dialog)
+        ttk.Button(frame, text="Guardar vinculación", command=save).pack(anchor="e")
+
+    def show_releases(self):
+        if not self.flow or self.demo:
+            return
+        self.refresh_identity()
+        if not self.project_binding:
+            return self.edit_identity()
+        history = releases(self.project_binding)
+        dialog = tk.Toplevel(self)
+        dialog.title("Liberaciones y recuperación")
+        dialog.transient(self)
+        frame = ttk.Frame(dialog, padding=18)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="Cada liberación conserva su ZIP y copia BRD. Selecciona dos para comparar; recuperar crea otro archivo y conserva el original.", wraplength=850).pack(anchor="w", pady=8)
+        tree = ttk.Treeview(frame, columns=("release", "rev", "date", "status"), show="headings", height=10, selectmode="extended")
+        for column, label, width in (("release", "Liberación", 95), ("rev", "PCB", 80), ("date", "UTC", 250), ("status", "Estado", 320)):
+            tree.heading(column, text=label)
+            tree.column(column, width=int(width * self.dpi_scale))
+        tree.pack(fill="both", expand=True)
+        indexed = {entry["fabrication_release_id"]: entry for entry in history}
+        status_labels = {"pending_cam_review": "Pendiente de revisión CAM", "pending_cam_review_with_warnings": "Pendiente CAM · con avisos"}
+        for entry in history:
+            display_date = entry["created_utc"][:19].replace("T", " ") + " UTC"
+            tree.insert("", "end", iid=entry["fabrication_release_id"], values=(entry["release_label"], entry["pcb_revision"], display_date, status_labels.get(entry["release_status"], entry["release_status"])))
+        def chosen():
+            return [indexed[key] for key in tree.selection()]
+        def folder():
+            items = chosen()
+            if items:
+                os.startfile(local(self.project_binding["root"], items[0]["archive_project_path"]).parent)
+        def compare():
+            try:
+                items = chosen()
+                if len(items) != 2:
+                    raise ValueError("Selecciona dos liberaciones para comparar.")
+                result = compare_releases(self.project_binding, *items)
+                messagebox.showinfo("Comparación de liberaciones", f"{result['first']} → {result['second']}\nPCB: {' → '.join(result['pcb_revisions'])}\n\nArchivos cambiados:\n" + "\n".join(result["changed"]) + "\n\nAñadidos:\n" + "\n".join(result["added"]) + "\n\nRetirados:\n" + "\n".join(result["removed"]), parent=dialog)
+            except (OSError, ValueError, KeyError) as exc:
+                messagebox.showerror("Comparación", str(exc), parent=dialog)
+        def recover():
+            import shutil
+            try:
+                items = chosen()
+                if len(items) != 1:
+                    raise ValueError("Selecciona una liberación.")
+                entry = items[0]
+                source = local(self.project_binding["root"], entry["source_board"]["project_relative_path"])
+                if digest(source) != entry["source_board"]["sha256"]:
+                    raise ValueError("La copia de origen no coincide con su hash.")
+                target = filedialog.asksaveasfilename(parent=dialog, title="Recuperar como otro BRD", initialdir=Path(self.flow.board).parent,
+                                                     initialfile=Path(self.flow.board).stem + "_recuperada_" + entry["release_label"] + ".brd", defaultextension=".brd")
+                if not target:
+                    return
+                target = Path(target).resolve()
+                if target.parent != Path(self.flow.board).resolve().parent or target.suffix.lower() != ".brd":
+                    raise ValueError("Guarda la copia .brd en la misma carpeta de Allegro.")
+                with source.open("rb") as original, target.open("xb") as output:
+                    shutil.copyfileobj(original, output)
+                bind_board(target, entry["project_name"], entry["pcb_revision"], entry["project_id"], "Recuperada de " + entry["release_label"])
+                messagebox.showinfo("Copia recuperada", "Se ha creado otro archivo, sin cambiar la placa abierta:\n" + str(target), parent=dialog)
+            except (OSError, ValueError, KeyError) as exc:
+                messagebox.showerror("Recuperación", str(exc), parent=dialog)
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill="x", pady=10)
+        for label, callback in (("Abrir carpeta", folder), ("Comparar seleccionadas", compare), ("Recuperar copia BRD…", recover)):
+            ttk.Button(buttons, text=label, command=callback).pack(side="left", padx=4)
 
     def set_export_path(self, path):
         self.last_zip = Path(path) if path else None

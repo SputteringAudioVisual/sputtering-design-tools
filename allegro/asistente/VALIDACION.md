@@ -1,4 +1,4 @@
-# Validación de la beta 0.1.2
+# Validación de la beta 0.2.0
 
 Entorno: Windows, Python 3.12, Allegro PCB Designer 17.2 P028, utilidades 0.3.0. Pruebas sobre copias de placas; no se modifica la PSU original.
 
@@ -15,6 +15,9 @@ Entorno: Windows, Python 3.12, Allegro PCB Designer 17.2 P028, utilidades 0.3.0.
 - Versión 0.1.1: prueba sobre una copia de la PSU guardada con cuatro referencias de conectores ausentes. Exportación completa primero excluyéndolas y después aceptando el aviso con un motivo; no se ejecuta recuperación ni edición de textos. Los dos ZIP incluyen el informe de decisiones y el manifiesto identifica las excepciones. Se comprueban CRC y hashes; el archivo original conserva su hash durante la prueba. El caso de cinco referencias ausentes recibido en la consola se cubre además en las pruebas de condiciones de exportación.
 - Versión 0.1.2: en una copia del estado exportado de la PSU, el contador nativo devuelve **0 conexiones pendientes** y el flujo completo genera el ZIP sin casilla manual de conectividad. En una copia anterior sin rutear devuelve **37 conexiones pendientes**, distribuidas en sus ocho redes, incluso después de ocultar todos los ratsnests. Ambos casos devuelven cero pines sin colocar y conservan los hashes de sus fuentes. La base documental es la tabla Net Attributes de `algroskill/02dbdesc.html` de Cadence 17.2.
 - La prueba de interfaz verifica que la ruta del ZIP coincide con el archivo generado y que se habilita **Abrir carpeta exportada**. Las pruebas de recuperación de rutas encuentran la exportación de la misma placa y rechazan archivos ajenos.
+- Trazabilidad: **29 pruebas automáticas** en total. Se comprueban identidad declarada sin atribuir metadatos a históricos, vínculo explícito tras renombrar un BRD, copia exacta del estado en memoria distinta del archivo guardado, inventario completo con alias y funciones, imposibilidad de reanotar un ZIP sellado, F distintas con la misma revisión PCB, comparación de archivos, cambio del archivo guardado, revisión distinta, traslado del proyecto y no reutilización de etiquetas fallidas.
+- Interoperabilidad: el editor valida el ejemplo sintético común y produce F001 → E001 → E002; el lector del productor verifica ambos derivados, hashes ZIP/manifiesto del padre, identidad/revisión y raíz preservadas. No se distribuyen las PCB reales de prueba.
+- Allegro real: dos exportaciones nuevas sobre una copia con identidad explícitamente declarada de prueba. El snapshot se captura con siete films ya configurados antes de generar Gerber. Se verifican los UUIDs y F, inventario exhaustivo de 17 archivos además del manifiesto, versiones reales de Allegro/las utilidades, índices y fuentes portables. El original conserva su hash y no se modifican sus ZIP anteriores.
 
 ## Pendiente de cerrar antes de considerarlo estable
 

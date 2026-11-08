@@ -1,4 +1,4 @@
-# Asistente externo de PCB · beta 0.1.2
+# Asistente externo de PCB · beta 0.2.0
 
 Ventana opcional para guiar el trabajo con Allegro 17.2: colocación → reglas → ruteo → revisión → fabricación. Ejecuta las utilidades SKILL 0.3.0 existentes mediante un complemento independiente y muestra sus resultados. No usa reconocimiento de pantalla ni simula pulsaciones sobre Allegro.
 
@@ -42,6 +42,25 @@ La tabla inferior distingue **Correcto**, **Pendiente**, **Revisar**, **Aceptado
 
 Debajo de la tabla aparece **Último ZIP**, con su ruta completa, **Abrir carpeta exportada** y **Copiar ruta**. Al seleccionar de nuevo una placa, se recupera su última exportación registrada (también las realizadas con la beta anterior). Esta ruta identifica un paquete existente; no implica que se haya actualizado después de editar la placa.
 
+## Placa, revisión y liberación de fabricación
+
+Antes de tu primera exportación nueva pulsa **Placa y revisión…**. Declara el nombre y una revisión como `1.0` o la que realmente corresponda; el programa no la deduce del nombre del archivo. Se crea una identidad estable para esa PCB física. Si renombras o recuperas el BRD, elige en ese diálogo la identidad existente para conservarla. El frontal y la PCB de componentes son placas diferentes; no deben compartir identidad solo por pertenecer al mismo módulo.
+
+- Cobre, circuito, taladros, contorno o colocación: incrementa la revisión mayor, por ejemplo `1.0` → `2.0`.
+- Solo serigrafía o documentación en Allegro: incrementa la menor, `1.0` → `1.1`.
+- Reexportar el mismo diseño conserva su revisión PCB y crea otra liberación: **F001, F002…** Cada una tiene UUID propio, fecha, perfil, herramientas, estado y copia BRD de origen.
+- Una edición en el editor Gerber crea una **E001, E002…**, vinculada a la F original y a su padre inmediato. No cambia silenciosamente la revisión PCB de Allegro.
+
+El generador conserva sus nombres `<archivo>_fab_vNNN.zip` por compatibilidad. Ese contador puede diferir de F001… si ya había ZIP antiguos o se renombró el BRD: los identificadores y etiquetas del manifiesto son la referencia común. Un fallo puede dejar un salto F; no se reutiliza una etiqueta reservada.
+
+El asistente configura los films y captura el BRD exacto en el mismo comando que genera los Gerber. Incluye el informe y manifiesto completo antes de **sellar** el ZIP. Desde ese momento no se reanota ni sobrescribe esa liberación; otra exportación produce otro ID. La copia BRD se conserva localmente dentro del proyecto y se referencia por su hash; no se añade al ZIP destinado al fabricante.
+
+**Liberaciones…** muestra el historial de esa identidad. Puedes abrir sus carpetas, comparar los hashes de dos paquetes y recuperar el BRD de origen como otro archivo en la carpeta Allegro. Recuperar no reemplaza la PCB abierta ni sobrescribe archivos existentes. Los ZIP anteriores a este sistema siguen intactos como históricos sin identidad/revisión atribuida.
+
+La cabecera muestra nombre, revisión PCB y F asociada. Indica si el archivo guardado cambió, si hay otra revisión declarada o si el paquete fue alterado. Igualdad del archivo guardado no demuestra que Allegro no tenga ediciones en memoria: repite la revisión final después de editar. El editor Gerber consulta la misma identidad y conserva sus E con su procedencia.
+
+El [contrato común](../../docs/CONTRATO_TRAZABILIDAD_PCB.md), su esquema y ejemplo se publican en `docs/`. En la instalación se incluyen en `documentacion/`. El v1 cubre Allegro → Gerber → edición derivada. Los frontales generados desde cero son otro productor y no reciben una procedencia falsa de Allegro.
+
 ## Comprobación automática de conectividad
 
 El asistente lee los atributos nativos `net->unconnected` y `net->unplaced` documentados por Cadence para Allegro 17.2. Suma las conexiones pendientes por red, muestra qué redes tienen pendientes y comprueba por separado los pines sin colocar, porque el primer contador no los incluye. No cuenta líneas visibles ni usa `NET_RATT_COUNT` de extracta. La exportación vuelve a consultar estos datos después de actualizar rellenos y DRC.
@@ -69,6 +88,8 @@ Después de actualizar desde 0.1.0, cierra y vuelve a abrir **solo el asistente*
 ## Archivos dentro del proyecto
 
 El asistente conserva el historial completo de resultados en `Asistente/<nombre de placa>/historial.jsonl` y el perfil de anchos aplicado en `perfil.json`. Las copias se guardan en `Copias_seguridad`, los informes de máscara junto al `.brd` y el paquete Gerber + NC Drill + rutas de slots, cuando corresponde, en `Fabricacion`, igual que con las utilidades existentes. No se guarda automáticamente encima del `.brd`: usa el botón de guardar o File > Save.
+
+La identidad y liberaciones están en `Sputtering/pcb/<project_id>/` dentro de la raíz común con Capture/Allegro. El vínculo de cada archivo está en `Asistente/<nombre>/identidad_pcb.json`. Los registros usan rutas relativas: al mover el proyecto se conservan las asociaciones, fuentes e historial. Las copias de origen exactas de cada F están en `releases/<release_id>/source.brd` y los índices guardan los hashes del ZIP y manifiesto finales.
 
 Las carpetas `sessions` y `scratch` de la aplicación son intercambio y trabajo temporal de la conexión; no son bibliotecas necesarias para reabrir la PCB. Las salidas permanentes y las copias de la placa quedan dentro del proyecto. No subas esas carpetas temporales a GitHub.
 

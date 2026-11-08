@@ -6,7 +6,7 @@ import hashlib
 import json
 import time
 
-VERSION = "0.1.2-beta"
+VERSION = "0.2.0-beta"
 STEPS = (
     "1 · Abrir y conectar", "2 · Colocar componentes", "3 · Preparar reglas",
     "4 · Rutear", "5 · Revisar la placa", "6 · Exportar fabricación",

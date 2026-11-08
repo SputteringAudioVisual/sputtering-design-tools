@@ -23,16 +23,22 @@ $PythonPath = [IO.Path]::GetFullPath($PythonPath)
 if ($LASTEXITCODE -ne 0) { throw 'Se necesita Python 3.10 o posterior con Tkinter funcionando.' }
 $pythonWindow = Join-Path (Split-Path -Parent $PythonPath) 'pythonw.exe'
 if (-not (Test-Path -LiteralPath $pythonWindow -PathType Leaf)) { throw 'No se encuentra pythonw.exe junto a Python.' }
-$files = @('app.py','iniciar.pyw','workflow.py','transport.py','saved_board.py','package_report.py','README.md','VALIDACION.md','core_baseline.json','bridge/pcb_assistant_bridge.il')
+$files = @('app.py','iniciar.pyw','workflow.py','transport.py','saved_board.py','package_report.py','traceability.py','README.md','VALIDACION.md','core_baseline.json','bridge/pcb_assistant_bridge.il',
+    'documentacion/CONTRATO_TRAZABILIDAD_PCB.md','documentacion/fabrication-manifest-v1.schema.json','documentacion/fabrication-manifest-v1.example.json')
 $before = @{}
 Get-ChildItem -LiteralPath $core -File | ForEach-Object { $before[$_.Name] = (Get-FileHash -LiteralPath $_.FullName).Hash }
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
 New-Item -ItemType Directory -Path $target -Force | Out-Null
 foreach ($relative in $files) {
     $from = Join-Path $source $relative
+    if ($relative.StartsWith('documentacion/')) {
+        $sharedDocs = Join-Path (Split-Path -Parent (Split-Path -Parent $source)) 'docs'
+        $from = Join-Path $sharedDocs (Split-Path -Leaf $relative)
+    }
     $to = Join-Path $target $relative
     if (-not (Test-Path -LiteralPath $from -PathType Leaf)) { throw "Falta el archivo de instalacion: $relative" }
     if (Test-Path -LiteralPath $to -PathType Leaf) {
+        if ((Get-FileHash -LiteralPath $from).Hash -eq (Get-FileHash -LiteralPath $to).Hash) { continue }
         $backup = Join-Path $target ('Backups/' + $stamp + '/' + $relative)
         New-Item -ItemType Directory -Path (Split-Path -Parent $backup) -Force | Out-Null
         Copy-Item -LiteralPath $to -Destination $backup

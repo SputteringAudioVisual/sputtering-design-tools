@@ -60,7 +60,7 @@ class Mailbox:
             return False, "Esperando una respuesta completa"
         if state.get("token") != self.token:
             return False, "La sesión de Allegro ha cambiado"
-        if state.get("protocol") != "3":
+        if state.get("protocol") != "4":
             return False, "Recarga la conexión con Allegro para usar esta actualización"
         if board_key(state.get("board", "")) != board_key(self.board):
             return False, "Allegro tiene abierta otra placa"
@@ -83,7 +83,7 @@ class Mailbox:
             if code not in allowed or not count.isdigit():
                 raise ValueError("Excepción no válida.")
         job = uuid.uuid4().hex
-        fields = ["PCBWA3", self.token, job, action, self.board,
+        fields = ["PCBWA4", self.token, job, action, self.board,
                   "|".join(profile.power_nets) or "-", str(profile.signal_mm), str(profile.power_mm), ticket,
                   "1" if policy.check_texts else "0", "|".join(policy.excluded_refs) or "-", "|".join(waivers) or "-"]
         payload = "\n".join(fields) + "\n"

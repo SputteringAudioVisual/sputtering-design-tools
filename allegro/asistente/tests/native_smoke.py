@@ -80,9 +80,12 @@ def main():
         report["persisted"] = verify_snapshot(snapshot, "C:/Cadence/SPB_17.2/tools/bin/extracta.exe", root / "scratch")
         if args.exercise_ui:
             from app import Assistant
+            from traceability import bind_board
             import zipfile
             window = Assistant(board=str(root / "input.brd"))
             window.withdraw()
+            bind_board(root / "input.brd", "PLACA SINTETICA DE PRUEBA", "1.0", note="Declaración explícita de fixture, no de una PCB histórica")
+            window.refresh_identity()
             window.mailbox = box
             window.placement_var.set(True)
             window.excluded_var.set(args.exclude_refs)
@@ -118,6 +121,7 @@ def main():
                     time.sleep(0.05)
                 state = window.flow.state
                 assert state["status"] == "ok" and state.get("zip"), state
+                assert state["source_films"] == "7", state
                 assert window.last_zip and window.last_zip.is_file()
                 assert str(window.last_zip) == window.export_path_var.get()
                 assert str(window.export_folder_button["state"]) == "normal"

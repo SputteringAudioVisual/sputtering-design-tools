@@ -121,7 +121,7 @@ class Protocol(unittest.TestCase):
         self.temp.cleanup()
 
     def heartbeat(self, board=None, token="abc"):
-        (self.box.root / "heartbeat.tsv").write_text(f"token\t{token}\nboard\t{board or self.box.board}\nprotocol\t3\n", encoding="cp1252")
+        (self.box.root / "heartbeat.tsv").write_text(f"token\t{token}\nboard\t{board or self.box.board}\nprotocol\t4\n", encoding="cp1252")
 
     def test_wrong_board_stale_or_changed_session_refused(self):
         self.heartbeat(board="C:/other.brd")
@@ -220,7 +220,8 @@ class PackageReview(unittest.TestCase):
             folder = root / "Fabricacion"
             folder.mkdir()
             archive = folder / "PSU_fab_v001.zip"
-            archive.write_bytes(b"fixture")
+            with zipfile.ZipFile(archive, "w") as stream:
+                stream.writestr("manifest.json", "{}")
             (folder / "other_fab_v999.zip").write_bytes(b"other")
             self.assertEqual(archive, latest_export(board))
             remember_export(board, archive)
@@ -249,7 +250,7 @@ class PackageReview(unittest.TestCase):
                 self.assertEqual("EXPORTADO_CON_EXCEPCIONES_USUARIO", result["status"])
                 self.assertEqual("EXPORTADO_SIN_AVISOS", result["generator_status"])
                 self.assertIn("Estado: EXPORTADO_CON_EXCEPCIONES_USUARIO", stream.read("LEEME_FABRICACION.txt").decode())
-                self.assertEqual(2, len(result["files"]))
+                self.assertEqual(3, len(result["files"]))
                 for item in result["files"]:
                     self.assertEqual(item["sha256"], hashlib.sha256(stream.read(item["name"])).hexdigest())
 
