@@ -22,7 +22,7 @@ procedure(pcbwaHeartbeat()
   let((f)
     f=outfile(strcat(pcbwaRoot "/heartbeat.tsv"))
     when(f
-      fprintf(f "token\t%s\nboard\t%s\n" pcbwaToken or(pcbwaBoard() "-"))
+      fprintf(f "token\t%s\nboard\t%s\nprotocol\t2\n" pcbwaToken or(pcbwaBoard() "-"))
       close(f))))
 
 procedure(pcbwaTimerCB(window timer elapsed)
@@ -59,26 +59,34 @@ procedure(pcbwaStop()
   t)
 
 procedure(pcbwaCollect(f)
-  prog((design placed unplaced missing mask)
+  prog((design placed unplaced missing mask missingRefs ref)
     design=axlDBGetDesign()
     unless(design error("PCB ASISTENTE: no hay placa abierta."))
     placed=0 unplaced=0
     foreach(c design->components
-      if(c->symbol then placed=placed+1 else unplaced=unplaced+1))
+      if(c->symbol then
+        placed=placed+1 ref=c->name
+        unless(setof(txt axlDBGetAttachedText(c->symbol) equal(txt->text ref))
+          missingRefs=cons(ref missingRefs))
+      else unplaced=unplaced+1))
     missing=pcbSilkFaltantesAuditar()
     mask=pcbMaskAudit()
     unless(listp(mask) && length(mask)==6 error("PCB ASISTENTE: auditoria de mascara incompleta."))
     fprintf(f "placed\t%d\nunplaced\t%d\nmissing\t%d\n" placed unplaced car(missing))
+    foreach(ref missingRefs fprintf(f "missing_ref\t%s\n" ref))
     fprintf(f "drc\t%L\nshapes\t%L\n" axlDRCGetCount() axlDBDynamicShapes(nil))
     fprintf(f "mask_pins\t%d\nmask_vias\t%d\nmask_extras\t%d\nmask_conflicts\t%d\n"
       nth(2 mask) nth(3 mask) nth(4 mask) nth(5 mask))
     foreach(net design->nets fprintf(f "net\t%s\n" net->name))
     fprintf(f "core\t%s\nsignal_mm\t%.3f\npower_mm\t%.3f\n" pcbToolsVersion pcbSignalWidthMM pcbPowerWidthMM)
     fprintf(f "power_nets\t%s\n" buildString(pcbPowerNets "|"))
-    return(list(unplaced car(missing) mask))))
+    return(list(unplaced car(missing) mask missingRefs))))
 
-procedure(pcbwaDo(action nets signal power ticket job f)
-  prog((result snapshot checks mask)
+procedure(pcbwaAllowed(code count waivers)
+  count==0 || member(sprintf(nil "%s:%d" code count) waivers))
+
+procedure(pcbwaDo(action nets signal power ticket job f checkTexts excluded waivers)
+  prog((result snapshot checks mask missingCount drc)
     case(action
       ("inspect"
         pcbSilkAuditar() pcbAnchosAuditar() pcbFabAuditar())
@@ -115,29 +123,36 @@ procedure(pcbwaDo(action nets signal power ticket job f)
         unless(pcbwaSnapshotJob && equal(ticket pcbwaSnapshotJob)
           error("PCB ASISTENTE: falta comprobar una copia guardada reciente."))
         ; Always refresh DRC and shapes again, even if the UI has a prior result.
-        unless(pcbRevisionActualizar()==0 error("PCB ASISTENTE: quedan DRC o fallo la revision."))
+        drc=pcbRevisionActualizar()
+        unless(numberp(drc) error("PCB ASISTENTE: no se pudo actualizar la revision."))
+        unless(pcbwaAllowed("drc" drc waivers)
+          error("PCB ASISTENTE: DRC no aceptados (%d). Revisa el resumen del asistente." drc))
         checks=pcbwaCollect(f) mask=nth(2 checks)
-        unless(car(checks)==0 && cadr(checks)==0 &&
-          nth(2 mask)==0 && nth(3 mask)==0 && nth(4 mask)==0 && nth(5 mask)==0
-          error("PCB ASISTENTE: quedan componentes, referencias o mascara por revisar."))
+        missingCount=length(setof(ref nth(3 checks) !member(upperCase(ref) excluded)))
+        unless(pcbwaAllowed("unplaced" car(checks) waivers) &&
+          (!checkTexts || pcbwaAllowed("missing" missingCount waivers)) &&
+          pcbwaAllowed("mask_pins" nth(2 mask) waivers) && pcbwaAllowed("mask_vias" nth(3 mask) waivers) &&
+          pcbwaAllowed("mask_extras" nth(4 mask) waivers) && pcbwaAllowed("mask_conflicts" nth(5 mask) waivers)
+          error("PCB ASISTENTE: hay avisos nuevos o todavia no aceptados. Repite la comprobacion final."))
         pcbwaSnapshotJob=nil
         result=pcbFabExportar()
         unless(result error("PCB ASISTENTE: no se genero el paquete."))
         fprintf(f "zip\t%s\n" result)
+        fprintf(f "exceptions\t%s\n" buildString(waivers "|"))
         fprintf(f "warnings\t%s\n" if(pcbFabLogsConAvisos(car(pcbFabLastResult)) then "1" else "0")))
       (t error("PCB ASISTENTE: accion no permitida.")))
     unless(equal(action "export") pcbwaCollect(f))
     return(t)))
 
 procedure(pcbwaDispatch()
-  prog((request magic token job action board nets signal power ticket extra
+  prog((request magic token job action board nets signal power ticket extra checkTexts excluded waivers
         f log oldPo oldErr result output)
     pcbwaPending=t
     request=infile(strcat(pcbwaRoot "/request.tsv"))
     unless(request pcbwaPending=nil return(nil))
     result=errset(list(pcbwaLine(request) pcbwaLine(request) pcbwaLine(request)
       pcbwaLine(request) pcbwaLine(request) pcbwaLine(request) pcbwaLine(request)
-      pcbwaLine(request) pcbwaLine(request)) t)
+      pcbwaLine(request) pcbwaLine(request) pcbwaLine(request) pcbwaLine(request) pcbwaLine(request)) t)
     extra=gets(extra request)
     close(request)
     deleteFile(strcat(pcbwaRoot "/request.tsv"))
@@ -145,10 +160,14 @@ procedure(pcbwaDispatch()
     result=car(result)
     magic=nth(0 result) token=nth(1 result) job=nth(2 result) action=nth(3 result)
     board=nth(4 result) nets=nth(5 result) signal=nth(6 result) power=nth(7 result) ticket=nth(8 result)
-    unless(equal(magic "PCBWA1") && equal(token pcbwaToken) &&
+    checkTexts=nth(9 result) excluded=nth(10 result) waivers=nth(11 result)
+    unless(equal(magic "PCBWA2") && equal(token pcbwaToken) && member(checkTexts '("0" "1")) &&
       strlen(job)==32 && rexMatchp("^[a-f0-9]+$" job) &&
       member(action '("inspect" "widths" "mask" "references" "review" "snapshot" "save" "export"))
       pcbwaPending=nil return(nil))
+    checkTexts=equal(checkTexts "1")
+    excluded=if(equal(excluded "-") then nil else parseString(excluded "|"))
+    waivers=if(equal(waivers "-") then nil else parseString(waivers "|"))
     when(member(job pcbwaSeen) || isFile(strcat(pcbwaRoot "/" job ".result.tsv"))
       pcbwaPending=nil return(nil))
     pcbwaSeen=cons(job pcbwaSeen)
@@ -162,7 +181,7 @@ procedure(pcbwaDispatch()
     poport=log errport=log
     result=errset(
       if(equal(lowerCase(board) lowerCase(or(pcbwaBoard() "-"))) then
-        pcbwaDo(action nets signal power ticket job f)
+        pcbwaDo(action nets signal power ticket job f checkTexts excluded waivers)
       else error("PCB ASISTENTE: la placa activa no coincide. No se ejecuta la operacion.")) t)
     poport=oldPo errport=oldErr
     close(log)

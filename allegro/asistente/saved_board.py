@@ -27,7 +27,7 @@ def check_tables(component_text, geometry_text):
                    and item.get("GRAPHIC_DATA_7") == item.get("REFDES"))
     missing = sorted(expected - refs.keys())
     duplicates = sorted(ref for ref in expected if refs[ref] > 1)
-    return {"ok": bool(expected) and not missing and not duplicates,
+    return {"ok": bool(expected) and not missing and not duplicates, "checked": bool(expected),
             "components": len(expected), "missing": missing, "duplicates": duplicates}
 
 

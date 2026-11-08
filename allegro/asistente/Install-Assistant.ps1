@@ -23,7 +23,7 @@ $PythonPath = [IO.Path]::GetFullPath($PythonPath)
 if ($LASTEXITCODE -ne 0) { throw 'Se necesita Python 3.10 o posterior con Tkinter funcionando.' }
 $pythonWindow = Join-Path (Split-Path -Parent $PythonPath) 'pythonw.exe'
 if (-not (Test-Path -LiteralPath $pythonWindow -PathType Leaf)) { throw 'No se encuentra pythonw.exe junto a Python.' }
-$files = @('app.py','iniciar.pyw','workflow.py','transport.py','saved_board.py','README.md','VALIDACION.md','core_baseline.json','bridge/pcb_assistant_bridge.il')
+$files = @('app.py','iniciar.pyw','workflow.py','transport.py','saved_board.py','package_report.py','README.md','VALIDACION.md','core_baseline.json','bridge/pcb_assistant_bridge.il')
 $before = @{}
 Get-ChildItem -LiteralPath $core -File | ForEach-Object { $before[$_.Name] = (Get-FileHash -LiteralPath $_.FullName).Hash }
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'

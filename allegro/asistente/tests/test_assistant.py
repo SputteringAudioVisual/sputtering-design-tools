@@ -8,7 +8,10 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from saved_board import check_tables
 from transport import Mailbox, parse_fields, skill_string
-from workflow import Profile, Workflow, board_key
+from workflow import ExportPolicy, Profile, Workflow, board_key
+from package_report import annotate_package
+import hashlib
+import zipfile
 
 
 def good_state(board):
@@ -55,6 +58,56 @@ class Gates(unittest.TestCase):
         flow.placement_confirmed = flow.connections_confirmed = flow.cam_confirmed = True
         self.assertTrue(any("copia guardada" in reason for reason in flow.export_blockers()))
 
+    def test_intentionally_hidden_connector_references_are_optional(self):
+        flow = Workflow("C:/PSU/input.brd")
+        state = good_state(flow.board)
+        state.update(missing="5", missing_refs=["J1", "J2", "J3", "J4", "GND_+12V_RC1"])
+        flow.accept("review", state)
+        flow.persisted = dict(checked=True, ok=False, missing=state["missing_refs"], duplicates=[])
+        flow.placement_confirmed = flow.connections_confirmed = flow.cam_confirmed = True
+        flow.policy = ExportPolicy(excluded_refs=state["missing_refs"].copy()).validate()
+        self.assertEqual([], flow.export_blockers())
+        flow.policy.excluded_refs.remove("J1")
+        finding = next(item for item in flow.findings() if item.code == "missing")
+        self.assertEqual("J1", finding.detail)
+        self.assertEqual("1", finding.value)
+
+    def test_skipping_texts_does_not_skip_other_checks(self):
+        flow = Workflow("C:/PSU/input.brd", policy=ExportPolicy(check_texts=False))
+        state = good_state(flow.board)
+        state.update(missing="5", drc="2", fresh_drc="2")
+        flow.accept("review", state)
+        flow.placement_confirmed = flow.connections_confirmed = flow.cam_confirmed = True
+        self.assertEqual(["drc"], [item.code for item in flow.findings()])
+        flow.accept_finding("drc", "Dos avisos revisados en la placa")
+        self.assertEqual([], flow.export_blockers())
+        self.assertEqual(["drc:2"], flow.waiver_tokens())
+        state["drc"] = "3"
+        self.assertTrue(flow.export_blockers())
+
+    def test_acceptance_requires_reason_and_is_cleared_on_review(self):
+        flow = Workflow("C:/PSU/input.brd", policy=ExportPolicy(check_texts=False))
+        state = good_state(flow.board)
+        state.update(mask_vias="1")
+        flow.accept("review", state)
+        with self.assertRaises(ValueError):
+            flow.accept_finding("mask_vias", " ")
+        with self.assertRaises(ValueError):
+            flow.accept_finding("placement", "Lo sé")
+        flow.accept_finding("mask_vias", "Vía de prueba que quiero dejar abierta")
+        self.assertIn("mask_vias:1", flow.waiver_tokens())
+        flow.accept("review", state)
+        self.assertFalse(flow.waivers)
+
+    def test_unknown_counts_and_outdated_shapes_are_not_waivable(self):
+        flow = Workflow("C:/PSU/input.brd")
+        state = good_state(flow.board)
+        state.update(drc="nil", shapes="1")
+        flow.accept("inspect", state)
+        for code in ("drc", "shapes"):
+            with self.assertRaises(ValueError):
+                flow.accept_finding(code, "Acepto")
+
 
 class Protocol(unittest.TestCase):
     def setUp(self):
@@ -66,7 +119,7 @@ class Protocol(unittest.TestCase):
         self.temp.cleanup()
 
     def heartbeat(self, board=None, token="abc"):
-        (self.box.root / "heartbeat.tsv").write_text(f"token\t{token}\nboard\t{board or self.box.board}\n", encoding="cp1252")
+        (self.box.root / "heartbeat.tsv").write_text(f"token\t{token}\nboard\t{board or self.box.board}\nprotocol\t2\n", encoding="cp1252")
 
     def test_wrong_board_stale_or_changed_session_refused(self):
         self.heartbeat(board="C:/other.brd")
@@ -80,7 +133,7 @@ class Protocol(unittest.TestCase):
     def test_unicode_path_atomic_request_and_no_replay(self):
         job = self.box.submit("mask", Profile())
         request = (self.box.root / "request.tsv").read_text(encoding="cp1252").splitlines()
-        self.assertEqual(len(request), 9)
+        self.assertEqual(len(request), 12)
         self.assertIn("ñ", request[4])
         self.assertFalse((self.box.root / "request.tmp").exists())
         with self.assertRaises(ValueError):
@@ -112,6 +165,11 @@ class Protocol(unittest.TestCase):
             self.box.poll()
         self.assertIsNotNone(self.box.pending)
 
+    def test_policy_and_exact_waivers_are_transmitted_as_data(self):
+        self.box.submit("export", Profile(), "ticket", ExportPolicy(False, ["J1"]), ["drc:2"])
+        request = (self.box.root / "request.tsv").read_text(encoding="cp1252").splitlines()
+        self.assertEqual(["0", "J1", "drc:2"], request[-3:])
+
 
 class PersistedReferences(unittest.TestCase):
     components = "A!REFDES!SYM_X!SYM_Y!\nS!R1!1!2!\nS!J1!3!4!\n"
@@ -131,6 +189,33 @@ class PersistedReferences(unittest.TestCase):
         self.assertFalse(check_tables("A!REFDES!SYM_X!SYM_Y!\n", self.header)["ok"])
         with self.assertRaises(ValueError):
             check_tables("unexpected", self.header)
+
+
+class PackageReview(unittest.TestCase):
+    def test_report_manifest_hashes_and_original_payload_are_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            folder = root / "fabricacion_v001"
+            folder.mkdir()
+            archive = root / "fabricacion_v001.zip"
+            copper = b"gerber-data"
+            manifest = dict(status="EXPORTADO_SIN_AVISOS", files=[dict(name="TOP.art", bytes=len(copper), sha256=hashlib.sha256(copper).hexdigest())])
+            with zipfile.ZipFile(archive, "w") as stream:
+                stream.writestr("TOP.art", copper)
+                stream.writestr("manifest.json", json.dumps(manifest))
+                stream.writestr("LEEME_FABRICACION.txt", "Estado: EXPORTADO_SIN_AVISOS\n")
+            flow = Workflow(str(root / "input.brd"), policy=ExportPolicy(False))
+            annotate_package(archive, flow.export_record())
+            with zipfile.ZipFile(archive) as stream:
+                self.assertIsNone(stream.testzip())
+                self.assertEqual(copper, stream.read("TOP.art"))
+                result = json.loads(stream.read("manifest.json"))
+                self.assertEqual("EXPORTADO_CON_EXCEPCIONES_USUARIO", result["status"])
+                self.assertEqual("EXPORTADO_SIN_AVISOS", result["generator_status"])
+                self.assertIn("Estado: EXPORTADO_CON_EXCEPCIONES_USUARIO", stream.read("LEEME_FABRICACION.txt").decode())
+                self.assertEqual(2, len(result["files"]))
+                for item in result["files"]:
+                    self.assertEqual(item["sha256"], hashlib.sha256(stream.read(item["name"])).hexdigest())
 
 
 if __name__ == "__main__":

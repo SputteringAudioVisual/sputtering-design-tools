@@ -5,7 +5,7 @@ import os
 import time
 import uuid
 
-from workflow import ACTIONS, Profile, board_key
+from workflow import ACTIONS, ExportPolicy, Profile, board_key
 
 
 def skill_string(value):
@@ -20,10 +20,12 @@ def parse_fields(path):
     for line in Path(path).read_text(encoding="cp1252").splitlines():
         key, sep, value = line.partition("\t")
         if sep:
-            if key in result and key != "net":
+            if key in result and key not in ("net", "missing_ref"):
                 raise ValueError("Respuesta incompleta o duplicada.")
             if key == "net":
                 result.setdefault("nets", []).append(value)
+            elif key == "missing_ref":
+                result.setdefault("missing_refs", []).append(value)
             else:
                 result[key] = value
     return result
@@ -56,11 +58,13 @@ class Mailbox:
             return False, "Esperando una respuesta completa"
         if state.get("token") != self.token:
             return False, "La sesión de Allegro ha cambiado"
+        if state.get("protocol") != "2":
+            return False, "Recarga la conexión con Allegro para usar esta actualización"
         if board_key(state.get("board", "")) != board_key(self.board):
             return False, "Allegro tiene abierta otra placa"
         return True, "Conectado a la placa seleccionada"
 
-    def submit(self, action, profile: Profile, ticket="-"):
+    def submit(self, action, profile: Profile, ticket="-", policy=None, waivers=None):
         if action not in ACTIONS:
             raise ValueError("Acción no permitida.")
         if self.pending or (self.root / "request.tsv").exists():
@@ -69,9 +73,17 @@ class Mailbox:
         if not connected:
             raise ValueError(reason)
         profile.validate()
+        policy = (policy or ExportPolicy()).validate()
+        waivers = waivers or []
+        allowed = {"unplaced", "drc", "mask_pins", "mask_vias", "mask_extras", "mask_conflicts", "missing"}
+        for waiver in waivers:
+            code, _, count = waiver.partition(":")
+            if code not in allowed or not count.isdigit():
+                raise ValueError("Excepción no válida.")
         job = uuid.uuid4().hex
-        fields = ["PCBWA1", self.token, job, action, self.board,
-                  "|".join(profile.power_nets) or "-", str(profile.signal_mm), str(profile.power_mm), ticket]
+        fields = ["PCBWA2", self.token, job, action, self.board,
+                  "|".join(profile.power_nets) or "-", str(profile.signal_mm), str(profile.power_mm), ticket,
+                  "1" if policy.check_texts else "0", "|".join(policy.excluded_refs) or "-", "|".join(waivers) or "-"]
         payload = "\n".join(fields) + "\n"
         temporary = self.root / "request.tmp"
         temporary.write_bytes(payload.encode("cp1252", errors="strict"))

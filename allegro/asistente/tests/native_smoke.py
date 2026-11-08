@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--scratch", type=Path, required=True)
     parser.add_argument("--exercise-ui", action="store_true", help="Also test Tk button callbacks and create a TEST-ONLY ZIP on the disposable board")
+    parser.add_argument("--exclude-refs", default="")
     args = parser.parse_args()
     root = args.scratch.resolve()
     str(root).encode("ascii")
@@ -75,6 +76,8 @@ def main():
             window.withdraw()
             window.mailbox = box
             window.placement_var.set(True)
+            window.excluded_var.set(args.exclude_refs)
+            window.update_policy()
             try:
                 # These are the real button callbacks, driven by Tk's event loop.
                 # This is a software integration test, not desktop input injection.
@@ -89,7 +92,7 @@ def main():
                     if time.monotonic() > deadline:
                         raise TimeoutError("UI review/copy verification did not finish")
                     time.sleep(0.05)
-                assert window.flow.reviewed and window.flow.persisted.get("ok"), window.flow
+                assert window.flow.reviewed and window.flow.persisted.get("checked"), window.flow
                 # The fixture can be intentionally unrouted. This confirms only
                 # the export integration, never approval for manufacturing.
                 assert window.flow.export_blockers(), "Export must still require manual confirmations"
@@ -110,8 +113,39 @@ def main():
                     names = archive.namelist()
                     assert len([name for name in names if name.lower().endswith(".art")]) == 7, names
                     assert any(name.lower().endswith(".drl") for name in names), names
+                    assert "informes/ASISTENTE_REVISION.json" in names, names
                 report["ui_callbacks"] = "review -> snapshot -> extracta -> export: OK"
                 report["test_only_zip"] = state["zip"]
+                if report["persisted"]["missing"]:
+                    # Same absent texts, now accepted as a concrete warning
+                    # instead of permanently excluding individual RefDes.
+                    window.excluded_var.set("")
+                    window.update_policy()
+                    window.prepare_export()
+                    deadline = time.monotonic() + 240
+                    while window.finalizing or window.task or box.pending:
+                        window.update()
+                        if time.monotonic() > deadline:
+                            raise TimeoutError("Second UI review did not finish")
+                        time.sleep(0.05)
+                    window.flow.accept_finding("missing", "Referencias intencionadamente ausentes en la copia de prueba")
+                    window.placement_var.set(True)
+                    window.connections_var.set(True)
+                    window.cam_var.set(True)
+                    window.export()
+                    assert box.pending, window.flow.export_blockers()
+                    deadline = time.monotonic() + 240
+                    while box.pending:
+                        window.update()
+                        if time.monotonic() > deadline:
+                            raise TimeoutError("Accepted-warning export did not finish")
+                        time.sleep(0.05)
+                    assert window.flow.state["status"] == "ok", window.flow.state
+                    with zipfile.ZipFile(window.flow.state["zip"]) as archive:
+                        record = json.loads(archive.read("informes/ASISTENTE_REVISION.json"))
+                        assert record["accepted"][0]["code"] == "missing", record
+                        assert json.loads(archive.read("manifest.json"))["status"] == "EXPORTADO_CON_EXCEPCIONES_USUARIO"
+                    report["accepted_warning_zip"] = window.flow.state["zip"]
                 (root / "NO_FABRICAR_PRUEBA.txt").write_text("Paquete de prueba de software. La conectividad de esta copia NO esta aprobada para fabricacion.\n", encoding="utf-8")
                 print("Tk callbacks and TEST-ONLY versioned ZIP: OK", flush=True)
             finally:

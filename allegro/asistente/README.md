@@ -1,4 +1,4 @@
-# Asistente externo de PCB · beta 0.1.0
+# Asistente externo de PCB · beta 0.1.1
 
 Ventana opcional para guiar el trabajo con Allegro 17.2: colocación → reglas → ruteo → revisión → fabricación. Ejecuta las utilidades SKILL 0.3.0 existentes mediante un complemento independiente y muestra sus resultados. No usa reconocimiento de pantalla ni simula pulsaciones sobre Allegro.
 
@@ -38,7 +38,25 @@ python app.py --demo
 5. **Revisar.** Actualiza rellenos y DRC, consulta las auditorías y comprueba las referencias de una copia guardada. Puedes recuperar referencias que falten y guardar el original con copia previa. Las referencias recuperadas se crean en el origen del componente y necesitan revisión de posición.
 6. **Exportar fabricación.** Pulsa **Revisar DRC y comprobar copia guardada**. Confirma en Allegro que quedan cero conexiones sin rutear y que revisarás los archivos en CAM. Luego crea el ZIP versionado. No edites la placa entre esa comprobación y la exportación; si cambias algo, repite la comprobación final.
 
-En el registro inferior aparecen la salida de SKILL y las recomendaciones. **Abrir carpeta de resultados** muestra el historial de esa placa.
+La tabla inferior distingue **Correcto**, **Pendiente**, **Revisar**, **Aceptado** y **Omitido**. La salida de SKILL queda plegada en **Ver detalle técnico**. **Abrir carpeta de resultados** muestra el historial de esa placa. Las tres confirmaciones finales están juntas en la pantalla de exportación; puedes trabajar directamente en ese paso si tu PCB ya está preparada.
+
+## Serigrafía opcional y avisos aceptados
+
+No necesitas crear una referencia de serigrafía para todos los conectores. En **Revisar** o **Exportar fabricación**:
+
+- Para omisiones concretas, escribe sus nombres en **Sin referencia a propósito**, por ejemplo `J1; J2`, y pulsa **Guardar opciones de serigrafía**. Se conserva la comprobación para los demás componentes.
+- Si no quieres comprobar los textos de esa placa, desmarca **Revisar referencias de serigrafía (opcional)**. Esto no crea, borra, mueve ni cambia textos.
+- Para aceptar otro aviso conocido (por ejemplo un DRC revisado, una abertura de máscara intencionada o referencias duplicadas), selecciónalo en la tabla y pulsa **Aceptar aviso seleccionado…**. Escribe un motivo. Puedes retirar la aceptación antes de exportar.
+
+Las opciones de serigrafía se guardan por placa en `Asistente/<placa>/opciones_exportacion.json`. Las aceptaciones de avisos se aplican a la comprobación actual, con los datos concretos mostrados; una nueva revisión o un cambio realizado por el asistente las invalida. Si Allegro encuentra una cantidad distinta durante la exportación, solicita revisar de nuevo. Las ediciones directas de Allegro siguen requiriendo repetir la revisión final, aunque conserven los mismos contadores.
+
+Con exclusiones activas o la comprobación de textos desactivada, el asistente no ejecuta la recuperación general, porque volvería a crear también las referencias que has decidido omitir. Puedes recuperar referencias concretas manualmente en Allegro.
+
+La aplicación guarda las decisiones y sus motivos en el historial y en **`informes/ASISTENTE_REVISION.json` dentro del ZIP**, con su hash en el manifiesto. Un paquete con omisiones o avisos aceptados figura como `EXPORTADO_CON_EXCEPCIONES_USUARIO`; los avisos originales de los generadores se conservan por separado. Los Gerber y taladros no se alteran al incorporar este informe.
+
+Las operaciones que no han podido terminar (otra placa abierta, conexión perdida, copia incoherente, rellenos que no se han podido actualizar o generación de archivos fallida) necesitan completarse para producir el paquete. No se presentan como avisos ya comprobados que puedan aceptarse.
+
+Después de actualizar desde 0.1.0, cierra y vuelve a abrir **solo el asistente**. Allegro puede seguir abierto con tu trabajo: usa **Conectar con Allegro ya abierto** y pega una vez el nuevo comando de conexión.
 
 ## Archivos dentro del proyecto
 
@@ -50,8 +68,8 @@ Las carpetas `sessions` y `scratch` de la aplicación son intercambio y trabajo 
 
 - **Cero DRC no demuestra continuidad eléctrica.** La confirmación de cero conexiones sin rutear es manual. No se usa `NET_RATT_COUNT` como prueba: devolvió cero en una placa sin rutear durante las pruebas.
 - El asistente no analiza corrientes, estabilidad de una PSU, compatibilidad de footprints ni distancias de aislamiento. Ofrece recomendaciones y ejecuta comprobaciones concretas.
-- La limpieza destructiva de textos (`pcb_textos` / `pcbSilkAplicar`) no se ofrece como botón: se detectó una pérdida de referencias después de guardar. La auditoría y la recuperación de referencias permanecen disponibles. La verificación externa usa `extracta` sobre una copia y bloquea la exportación si falta una referencia de silkscreen o hay duplicados.
-- Se bloquea la exportación cuando falta una comprobación, hay componentes sin colocar, referencias ausentes, DRC, rellenos pendientes o máscara que requiere revisión. Las geometrías adicionales de máscara requieren revisión fuera de esta beta.
+- La limpieza destructiva de textos (`pcb_textos` / `pcbSilkAplicar`) no se ofrece como botón: se detectó una pérdida de referencias después de guardar. La auditoría y la recuperación de referencias permanecen disponibles y son voluntarias. La verificación externa usa `extracta` sobre una copia; las ausencias intencionadas se pueden excluir o aceptar.
+- Los resultados conocidos de componentes sin colocar, textos, DRC y máscara pueden aceptarse individualmente con un motivo. Las comprobaciones incompletas y los fallos de ejecución no se confunden con esos resultados.
 - Las ediciones hechas directamente en Allegro no se detectan continuamente. Los resultados corresponden al momento indicado por la operación. Repite la revisión final después de editar; no se certifica automáticamente que el estado siga intacto entre dos clics.
 - Una exportación con avisos necesita revisar sus logs y el visor CAM. Crear el ZIP no equivale a aprobarlo para fabricación.
 - La ruta de instalación del complemento debe ser ASCII. Los proyectos pueden tener espacios y caracteres españoles de Windows-1252, incluida `ñ`. Otros caracteres, por ejemplo emoji en la ruta, no están admitidos por este puente de Allegro 17.2.

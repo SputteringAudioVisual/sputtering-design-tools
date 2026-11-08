@@ -9,12 +9,14 @@ import subprocess
 import threading
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 import uuid
+import zipfile
 
 from saved_board import verify_snapshot
+from package_report import annotate_package
 from transport import Mailbox, append_history, skill_string
-from workflow import VERSION, STEPS, Profile, Workflow, project_history
+from workflow import VERSION, STEPS, ExportPolicy, Profile, Workflow, project_history
 
 HERE = Path(__file__).resolve().parent
 CORE = Path("C:/SPB_Data/pcbenv/pcb_tools")
@@ -44,6 +46,11 @@ class Assistant(tk.Tk):
         self.logged_pending = False
         self.poll_error = None
         self.action_buttons = []
+        self.export_record = None
+        self.check_text_var = tk.BooleanVar(value=True)
+        self.excluded_var = tk.StringVar(value="")
+        self.technical_var = tk.BooleanVar(value=False)
+        self.notice_var = tk.StringVar(value="Selecciona una placa para empezar.")
         self.board_var = tk.StringVar(value="Selecciona la placa con la que vas a trabajar")
         self.connection_var = tk.StringVar(value="Sin conectar")
         self.summary_var = tk.StringVar(value="Las comprobaciones aparecerán aquí al conectar Allegro.")
@@ -121,13 +128,33 @@ class Assistant(tk.Tk):
         logs.pack(fill="x")
         head = ttk.Frame(logs)
         head.pack(fill="x", pady=(0, 5))
-        ttk.Label(head, text="Resultados y próximos pasos", font=("Segoe UI", 11, "bold")).pack(side="left")
+        ttk.Label(head, text="Resumen de revisión", font=("Segoe UI", 11, "bold")).pack(side="left")
         ttk.Button(head, text="Abrir carpeta de resultados", command=self.open_results).pack(side="right")
-        frame = tk.Frame(logs)
-        frame.pack(fill="both")
-        self.log = tk.Text(frame, height=9, wrap="word", bg="#122138", fg="#e4edf9", bd=0,
+        ttk.Label(logs, textvariable=self.notice_var, wraplength=1050, foreground=BLUE).pack(anchor="w", pady=(0, 6))
+        table = ttk.Frame(logs)
+        table.pack(fill="x")
+        self.results = ttk.Treeview(table, columns=("status", "check", "detail"), show="headings", height=5)
+        for key, label, width in (("status", "Estado", 110), ("check", "Comprobación", 255), ("detail", "Detalle / qué hacer", 600)):
+            self.results.heading(key, text=label)
+            self.results.column(key, width=int(width * self.dpi_scale), stretch=key == "detail")
+        self.results.tag_configure("accepted", foreground="#526b63")
+        self.results.tag_configure("warning", foreground="#9b5700")
+        self.results.tag_configure("pending", foreground="#53647a")
+        table_scroll = ttk.Scrollbar(table, orient="vertical", command=self.results.yview)
+        self.results.configure(yscrollcommand=table_scroll.set)
+        self.results.pack(side="left", fill="x", expand=True)
+        table_scroll.pack(side="right", fill="y")
+        actions = ttk.Frame(logs)
+        actions.pack(fill="x", pady=5)
+        self.accept_button = ttk.Button(actions, text="Aceptar aviso seleccionado…", command=self.accept_selected)
+        self.accept_button.pack(side="left")
+        ttk.Button(actions, text="Retirar aceptación", command=self.revoke_selected).pack(side="left", padx=7)
+        ttk.Checkbutton(actions, text="Ver detalle técnico", variable=self.technical_var, command=self.toggle_technical).pack(side="right")
+        self.results.bind("<<TreeviewSelect>>", lambda event: self.refresh_accept_button())
+        self.log_frame = tk.Frame(logs)
+        self.log = tk.Text(self.log_frame, height=5, wrap="word", bg="#122138", fg="#e4edf9", bd=0,
                            padx=14, pady=10, font=("Consolas", 10), state="disabled")
-        scrollbar = ttk.Scrollbar(frame, command=self.log.yview)
+        scrollbar = ttk.Scrollbar(self.log_frame, command=self.log.yview)
         self.log.configure(yscrollcommand=scrollbar.set)
         self.log.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -191,6 +218,7 @@ class Assistant(tk.Tk):
             self.text("Cero DRC no significa cero conexiones pendientes. Comprueba ambos indicadores en Allegro.", bold=True)
         elif index == 4:
             self.text("Revisa lo que se va a fabricar", bold=True)
+            self.text_options()
             self.button("Actualizar rellenos y ejecutar DRC completo", lambda: self.run("review"), primary=True, native=True)
             self.button("Auditar textos, máscara, reglas y fabricación", lambda: self.run("inspect"), native=True)
             self.button("Recuperar referencias que falten", lambda: self.run("references"), native=True)
@@ -199,7 +227,10 @@ class Assistant(tk.Tk):
             self.text("La limpieza que elimina textos queda fuera de esta beta mientras resolvemos el fallo de referencias al guardar. Las referencias recuperadas se crean en el origen del componente: revisa su posición.")
         else:
             self.text("Prepara una comprobación final reciente", bold=True)
+            self.text_options()
             self.button("Revisar DRC y comprobar copia guardada", self.prepare_export, primary=True, native=True)
+            ttk.Checkbutton(self.content, text="He revisado colocación, polaridades y conectores",
+                            variable=self.placement_var, command=self.confirmations).pack(anchor="w", pady=3)
             ttk.Checkbutton(self.content, text="En Allegro figuran cero conexiones sin rutear",
                             variable=self.connections_var, command=self.confirmations).pack(anchor="w", pady=3)
             ttk.Checkbutton(self.content, text="Revisaré Gerber y taladros en un visor CAM antes de fabricar",
@@ -208,6 +239,96 @@ class Assistant(tk.Tk):
             self.text("No edites la placa entre la comprobación final y la exportación. Si haces algún cambio, vuelve a comprobarla. La continuidad eléctrica exige tu confirmación; esta beta no la certifica automáticamente.")
             self.text("El ZIP, los informes y las copias se guardan dentro del proyecto. Si hay avisos de exportación, aparecen en los resultados y deben revisarse.")
         self.refresh_buttons()
+
+    def text_options(self):
+        ttk.Checkbutton(self.content, text="Revisar referencias de serigrafía (opcional)",
+                        variable=self.check_text_var, command=self.update_policy).pack(anchor="w", pady=(0, 4))
+        self.text("Sin referencia a propósito: indica nombres concretos separados por ; (por ejemplo J1; J2). No se modifica ningún texto.")
+        ttk.Entry(self.content, textvariable=self.excluded_var).pack(fill="x", pady=(0, 6))
+        self.button("Guardar opciones de serigrafía", self.update_policy)
+
+    def update_policy(self):
+        if not self.flow:
+            return
+        try:
+            policy = ExportPolicy(self.check_text_var.get(), [ref.strip() for ref in self.excluded_var.get().replace(",", ";").split(";") if ref.strip()]).validate()
+            if policy != self.flow.policy:
+                self.flow.policy = policy
+                self.flow.waivers.clear()
+                folder = project_history(self.flow.board)
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "opciones_exportacion.json").write_text(json.dumps(vars(policy), ensure_ascii=False, indent=2), encoding="utf-8")
+                append_history(folder, {"time": time.time(), "action": "text_policy", **vars(policy)})
+            self.refresh_findings()
+        except (OSError, ValueError, UnicodeError) as exc:
+            messagebox.showerror("Opciones de serigrafía", str(exc))
+            raise ValueError(str(exc)) from exc
+
+    def toggle_technical(self):
+        if self.technical_var.get():
+            self.log_frame.pack(fill="both")
+        else:
+            self.log_frame.pack_forget()
+
+    def refresh_accept_button(self):
+        selection = self.results.selection()
+        finding = None
+        if self.flow and selection:
+            finding = next((item for item in self.flow.findings() if selection[0] == "issue:" + item.code), None)
+        busy = self.task or (self.mailbox and self.mailbox.pending)
+        self.accept_button.configure(state="normal" if finding and finding.waivable and not busy else "disabled")
+
+    def accept_selected(self):
+        selected = self.results.selection()
+        if not self.flow or not selected:
+            return
+        finding = next((item for item in self.flow.findings() if selected[0] == "issue:" + item.code), None)
+        if not finding or not finding.waivable:
+            return
+        reason = simpledialog.askstring("Aceptar aviso", f"{finding.title}\n{finding.detail}\n\n¿Por qué lo aceptas para esta exportación?", parent=self)
+        if reason is None:
+            return
+        try:
+            self.flow.accept_finding(finding.code, reason)
+            append_history(project_history(self.flow.board), {"time": time.time(), "action": "accept_warning", "code": finding.code, **self.flow.waivers[finding.code]})
+            self.refresh_findings()
+        except ValueError as exc:
+            messagebox.showerror("Aceptar aviso", str(exc))
+
+    def revoke_selected(self):
+        selected = self.results.selection()
+        if self.flow and selected:
+            code = selected[0].removeprefix("issue:")
+            if self.flow.waivers.pop(code, None):
+                append_history(project_history(self.flow.board), {"time": time.time(), "action": "revoke_warning", "code": code})
+            self.refresh_findings()
+
+    def refresh_findings(self):
+        selected = self.results.selection()
+        self.results.delete(*self.results.get_children())
+        if not self.flow or not self.flow.state:
+            self.notice_var.set("Conecta Allegro y pulsa una comprobación para ver el resumen.")
+            self.refresh_accept_button()
+            return
+        items = self.flow.findings()
+        remaining = [item for item in items if not self.flow.is_accepted(item)]
+        self.notice_var.set(f"{len(remaining)} pendientes. Selecciona un aviso para aceptarlo con un motivo." if remaining else "Listo para exportar con las opciones y aceptaciones indicadas.")
+        for item in items:
+            accepted = self.flow.is_accepted(item)
+            status = "Aceptado" if accepted else ("Revisar" if item.waivable else "Pendiente")
+            detail = item.detail + (" · " + self.flow.waivers[item.code]["reason"] if accepted else "")
+            self.results.insert("", "end", iid="issue:" + item.code, values=(status, item.title, detail), tags=("accepted" if accepted else "warning" if item.waivable else "pending",))
+        if self.flow.state.get("drc") == "0":
+            self.results.insert("", "end", iid="ok:drc", values=("Correcto", "DRC", "0 errores registrados"))
+        if all(self.flow.state.get(key) == "0" for key in ("mask_pins", "mask_vias", "mask_extras", "mask_conflicts")):
+            self.results.insert("", "end", iid="ok:mask", values=("Correcto", "Máscara de soldadura", "Pines y vías conformes; sin aberturas adicionales"))
+        if not self.flow.policy.check_texts or self.flow.policy.excluded_refs:
+            self.results.insert("", "end", iid="ok:policy", values=("Omitido", "Referencias de serigrafía", "Comprobación desactivada por decisión del usuario" if not self.flow.policy.check_texts else "Ausencia intencionada: " + ", ".join(self.flow.policy.excluded_refs)))
+        if self.flow.persisted.get("checked"):
+            self.results.insert("", "end", iid="ok:copy", values=("Comprobada", "Copia guardada", f"{self.flow.persisted.get('components', '?')} componentes leídos desde disco"))
+        if selected and self.results.exists(selected[0]):
+            self.results.selection_set(selected[0])
+        self.refresh_accept_button()
 
     def resize_content(self, event):
         self.canvas.itemconfigure(self.canvas_item, width=event.width)
@@ -235,6 +356,8 @@ class Assistant(tk.Tk):
             messagebox.showerror("Placa no válida", "Selecciona un archivo .brd guardado.")
             return
         self.flow = Workflow(str(path))
+        self.check_text_var.set(True)
+        self.excluded_var.set("")
         self.power_var.set("; ".join(self.flow.profile.power_nets))
         self.signal_var.set(str(self.flow.profile.signal_mm))
         self.width_var.set(str(self.flow.profile.power_mm))
@@ -255,7 +378,17 @@ class Assistant(tk.Tk):
             pass
         except (ValueError, TypeError, OSError) as exc:
             self.write(f"No se ha cargado el perfil anterior: {exc}")
+        try:
+            policy_path = project_history(path) / "opciones_exportacion.json"
+            self.flow.policy = ExportPolicy(**json.loads(policy_path.read_text(encoding="utf-8"))).validate()
+            self.check_text_var.set(self.flow.policy.check_texts)
+            self.excluded_var.set("; ".join(self.flow.policy.excluded_refs))
+        except FileNotFoundError:
+            pass
+        except (ValueError, TypeError, OSError) as exc:
+            self.write(f"No se han cargado las opciones anteriores: {exc}")
         self.write("Placa seleccionada. Conecta Allegro para ver su estado actual.")
+        self.refresh_findings()
 
     def new_session(self):
         if not self.flow:
@@ -310,11 +443,14 @@ class Assistant(tk.Tk):
     def run(self, action):
         if self.demo:
             return self.demo_message()
+        if action == "references" and self.flow and (not self.flow.policy.check_texts or self.flow.policy.excluded_refs):
+            messagebox.showinfo("Referencias omitidas", "Tus opciones conservan referencias ausentes. La recuperación general las volvería a crear; usa la edición manual para recuperar solo las que quieras. No se ha modificado ningún texto.")
+            return
         try:
             if self.task or not self.mailbox or not self.flow:
                 raise ValueError("Conecta Allegro y espera a que termine la operación actual.")
             profile = self.read_profile()
-            self.mailbox.submit(action, profile, self.ticket)
+            self.mailbox.submit(action, profile, self.ticket, self.flow.policy, self.flow.waiver_tokens() if action == "export" else [])
             self.logged_pending = False
             self.write(f"Enviado a Allegro: {action}. Esperando el resultado; no se repetirá el comando.")
             self.refresh_buttons()
@@ -327,6 +463,7 @@ class Assistant(tk.Tk):
             self.flow.placement_confirmed = self.placement_var.get()
             self.flow.connections_confirmed = self.connections_var.get()
             self.flow.cam_confirmed = self.cam_var.get()
+            self.refresh_findings()
 
     def prepare_export(self):
         self.finalizing = True
@@ -341,11 +478,13 @@ class Assistant(tk.Tk):
             return
         try:
             self.read_profile()
+            self.update_policy()
             self.confirmations()
             blockers = self.flow.export_blockers()
             if blockers:
                 self.write("Antes de exportar:\n• " + "\n• ".join(blockers))
                 return
+            self.export_record = self.flow.export_record()
             self.run("export")
         except ValueError as exc:
             messagebox.showerror("Perfil", str(exc))
@@ -354,6 +493,7 @@ class Assistant(tk.Tk):
         ready = self.demo or (self.mailbox and self.mailbox.connection()[0] and not self.mailbox.pending and not self.task)
         for button in self.action_buttons:
             button.configure(state="normal" if ready else "disabled")
+        self.refresh_accept_button()
 
     def poll(self):
         try:
@@ -377,6 +517,7 @@ class Assistant(tk.Tk):
                 if kind == "verified":
                     if payload["components"] != int(self.flow.state.get("placed", "-1")):
                         payload["ok"] = False
+                        payload["component_mismatch"] = True
                         self.write("El número de componentes de la copia no coincide con Allegro. Se bloquea la exportación.")
                     self.flow.persisted = payload
                     append_history(project_history(self.flow.board), {"time": time.time(), "action": "persisted_refs", **payload})
@@ -389,6 +530,7 @@ class Assistant(tk.Tk):
                     self.flow.persisted = {}
                     self.write("No se ha podido comprobar la copia guardada: " + str(payload))
                 self.finalizing = False
+                self.refresh_findings()
             self.refresh_buttons()
         except (ValueError, OSError) as exc:
             if self.poll_error != str(exc):
@@ -404,6 +546,8 @@ class Assistant(tk.Tk):
         if result["status"] != "ok":
             self.flow.invalidate()
             self.finalizing = False
+            self.notice_var.set("La operación no terminó. Consulta «Ver detalle técnico» para ver el error.")
+            self.refresh_findings()
             return
         self.summary_var.set(f"Colocados: {result.get('placed', '?')} · Sin colocar: {result.get('unplaced', '?')} · "
                              f"DRC registrados: {result.get('drc', '?')} · Rellenos pendientes: {result.get('shapes', '?')} · "
@@ -432,8 +576,16 @@ class Assistant(tk.Tk):
         elif action == "review" and self.finalizing:
             self.run("snapshot")
         elif action == "export":
+            try:
+                annotate_package(result["zip"], self.export_record)
+                self.notice_var.set("ZIP generado. Las opciones y los avisos aceptados están incluidos en el informe del paquete.")
+            except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+                self.notice_var.set("ZIP generado; falta incorporar el informe del asistente. Consulta el detalle técnico.")
+                self.write("No se incorporó el informe de decisiones: " + str(exc))
             self.write("Paquete generado: " + result.get("zip", "(ver informe)") +
                        ("\nHay avisos: revisa logs e informe del ZIP." if result.get("warnings") != "0" else "\nAbre el ZIP en tu visor CAM antes de fabricar."))
+        if action != "export":
+            self.refresh_findings()
 
     def open_results(self):
         if self.flow and not self.demo:
