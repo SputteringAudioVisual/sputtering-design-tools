@@ -1,10 +1,10 @@
-# Validación de la beta 0.1.1
+# Validación de la beta 0.1.2
 
 Entorno: Windows, Python 3.12, Allegro PCB Designer 17.2 P028, utilidades 0.3.0. Pruebas sobre copias de placas; no se modifica la PSU original.
 
 ## Comprobado
 
-- 17 pruebas automáticas: bloqueo con datos desconocidos o comprobaciones pendientes, aceptación de resultados conocidos con motivo, invalidación y cambio de cantidades; exclusiones específicas de referencias y desactivación opcional de su revisión; conservación de los demás controles; rechazo de otra placa/sesión; respuesta incompleta; una única operación pendiente; rutas con `ñ`; anchos no finitos; acciones no permitidas; referencias guardadas ausentes o duplicadas; informe de decisiones en ZIP con CRC, manifiesto y hashes coherentes.
+- 20 pruebas automáticas: bloqueo con datos desconocidos o comprobaciones pendientes, conectividad automática separada de DRC, aceptación de conexiones pendientes manteniendo su número real, invalidación y cambio de cantidades; exclusiones específicas de referencias y desactivación opcional de su revisión; conservación de los demás controles; rechazo de otra placa/sesión; respuesta incompleta; una única operación pendiente; rutas con `ñ`; anchos no finitos; acciones no permitidas; referencias guardadas ausentes o duplicadas; informe de decisiones en ZIP con CRC, manifiesto y hashes coherentes; recuperación de la ruta del último ZIP de cada placa.
 - Carga del complemento en Allegro real y recepción estructurada de auditoría: 15 componentes, 45 pines, 8 redes, cero vías y cuatro referencias ausentes en la copia de PSU.
 - Ejecución del mismo despachador de comandos para anchos, máscara, recuperación de referencias, revisión DRC y copia guardada.
 - Recuperación de cuatro referencias: `extracta` lee 15 componentes con 15 referencias de silkscreen persistidas después de guardar la copia; no faltan ni sobran referencias.
@@ -13,11 +13,13 @@ Entorno: Windows, Python 3.12, Allegro PCB Designer 17.2 P028, utilidades 0.3.0.
 - Flujo de los controles de la ventana, ejecutado mediante el bucle de eventos de Tk: revisión → copia → comprobación con `extracta` → confirmaciones → exportación. Antes de las confirmaciones se mantiene el bloqueo. El ZIP de prueba contiene siete `.art`, NC Drill y CRC válidos. Se trata de una copia de prueba cuya conectividad no se ha aprobado para fabricar; no es una PCB terminada.
 - Los seis pasos se construyen y cambian correctamente en la prueba de interfaz. Esto no sustituye la comprobación visual con la escala del monitor del usuario.
 - Versión 0.1.1: prueba sobre una copia de la PSU guardada con cuatro referencias de conectores ausentes. Exportación completa primero excluyéndolas y después aceptando el aviso con un motivo; no se ejecuta recuperación ni edición de textos. Los dos ZIP incluyen el informe de decisiones y el manifiesto identifica las excepciones. Se comprueban CRC y hashes; el archivo original conserva su hash durante la prueba. El caso de cinco referencias ausentes recibido en la consola se cubre además en las pruebas de condiciones de exportación.
+- Versión 0.1.2: en una copia del estado exportado de la PSU, el contador nativo devuelve **0 conexiones pendientes** y el flujo completo genera el ZIP sin casilla manual de conectividad. En una copia anterior sin rutear devuelve **37 conexiones pendientes**, distribuidas en sus ocho redes, incluso después de ocultar todos los ratsnests. Ambos casos devuelven cero pines sin colocar y conservan los hashes de sus fuentes. La base documental es la tabla Net Attributes de `algroskill/02dbdesc.html` de Cadence 17.2.
+- La prueba de interfaz verifica que la ruta del ZIP coincide con el archivo generado y que se habilita **Abrir carpeta exportada**. Las pruebas de recuperación de rutas encuentran la exportación de la misma placa y rechazan archivos ajenos.
 
 ## Pendiente de cerrar antes de considerarlo estable
 
 - Verificación visual de todos los pasos con la escala de la pantalla del usuario. La herramienta de captura de ventanas devolvió `window capture timed out: timed out waiting on channel`.
-- Detección automática fiable de conexiones sin rutear y de cambios hechos fuera del asistente. Por ahora requiere comprobación manual y repetir la revisión final.
+- Detección continua de cambios hechos fuera del asistente. Hay que repetir la revisión final después de editar directamente en Allegro. El recuento de conexiones pendientes ya se lee automáticamente durante cada comprobación.
 
 No se ha corregido ni modificado el núcleo 0.3.0 en este trabajo. El asistente evita automatizar la limpieza destructiva de textos por el fallo de persistencia ya detectado.
 

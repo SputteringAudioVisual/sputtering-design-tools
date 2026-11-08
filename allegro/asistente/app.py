@@ -14,7 +14,7 @@ import uuid
 import zipfile
 
 from saved_board import verify_snapshot
-from package_report import annotate_package
+from package_report import annotate_package, latest_export, remember_export
 from transport import Mailbox, append_history, skill_string
 from workflow import VERSION, STEPS, ExportPolicy, Profile, Workflow, project_history
 
@@ -58,7 +58,8 @@ class Assistant(tk.Tk):
         self.signal_var = tk.StringVar(value="0.40")
         self.width_var = tk.StringVar(value="0.80")
         self.placement_var = tk.BooleanVar()
-        self.connections_var = tk.BooleanVar()
+        self.export_path_var = tk.StringVar(value="")
+        self.last_zip = None
         self.cam_var = tk.BooleanVar()
         self._style()
         self._layout()
@@ -151,6 +152,14 @@ class Assistant(tk.Tk):
         ttk.Button(actions, text="Retirar aceptación", command=self.revoke_selected).pack(side="left", padx=7)
         ttk.Checkbutton(actions, text="Ver detalle técnico", variable=self.technical_var, command=self.toggle_technical).pack(side="right")
         self.results.bind("<<TreeviewSelect>>", lambda event: self.refresh_accept_button())
+        export_bar = ttk.Frame(logs)
+        export_bar.pack(fill="x", pady=(2, 5))
+        ttk.Label(export_bar, text="Último ZIP:").pack(side="left", padx=(0, 8))
+        ttk.Entry(export_bar, textvariable=self.export_path_var, state="readonly").pack(side="left", fill="x", expand=True)
+        self.export_folder_button = ttk.Button(export_bar, text="Abrir carpeta exportada", command=self.open_export_folder, state="disabled")
+        self.export_folder_button.pack(side="left", padx=(8, 0))
+        self.copy_export_button = ttk.Button(export_bar, text="Copiar ruta", command=self.copy_export_path, state="disabled")
+        self.copy_export_button.pack(side="left", padx=(8, 0))
         self.log_frame = tk.Frame(logs)
         self.log = tk.Text(self.log_frame, height=5, wrap="word", bg="#122138", fg="#e4edf9", bd=0,
                            padx=14, pady=10, font=("Consolas", 10), state="disabled")
@@ -215,7 +224,7 @@ class Assistant(tk.Tk):
             self.text("Usa el router manual o el autorouter de tu instalación después de revisar las reglas. Reserva el retorno de masa y los bucles de alimentación; revisa islas de cobre y conexiones pendientes.")
             self.text("Este asistente todavía no lanza ni controla el autorouter. Continúa aquí cuando hayas terminado de rutear y actualizado los planos de cobre.")
             self.button("Consultar el estado tras rutear", lambda: self.run("inspect"), primary=True, native=True)
-            self.text("Cero DRC no significa cero conexiones pendientes. Comprueba ambos indicadores en Allegro.", bold=True)
+            self.text("El asistente comprueba DRC y conexiones sin rutear por separado después de actualizar los rellenos.", bold=True)
         elif index == 4:
             self.text("Revisa lo que se va a fabricar", bold=True)
             self.text_options()
@@ -231,12 +240,10 @@ class Assistant(tk.Tk):
             self.button("Revisar DRC y comprobar copia guardada", self.prepare_export, primary=True, native=True)
             ttk.Checkbutton(self.content, text="He revisado colocación, polaridades y conectores",
                             variable=self.placement_var, command=self.confirmations).pack(anchor="w", pady=3)
-            ttk.Checkbutton(self.content, text="En Allegro figuran cero conexiones sin rutear",
-                            variable=self.connections_var, command=self.confirmations).pack(anchor="w", pady=3)
             ttk.Checkbutton(self.content, text="Revisaré Gerber y taladros en un visor CAM antes de fabricar",
                             variable=self.cam_var, command=self.confirmations).pack(anchor="w", pady=3)
             self.button("Crear ZIP de fabricación con versión", self.export, primary=True, native=True)
-            self.text("No edites la placa entre la comprobación final y la exportación. Si haces algún cambio, vuelve a comprobarla. La continuidad eléctrica exige tu confirmación; esta beta no la certifica automáticamente.")
+            self.text("Las conexiones sin rutear se cuentan automáticamente por red, también las que quedan hacia planos de cobre. Si editas la placa, repite la comprobación final. Colocación, polaridades y revisión CAM siguen siendo revisiones visuales.")
             self.text("El ZIP, los informes y las copias se guardan dentro del proyecto. Si hay avisos de exportación, aparecen en los resultados y deben revisarse.")
         self.refresh_buttons()
 
@@ -320,6 +327,8 @@ class Assistant(tk.Tk):
             self.results.insert("", "end", iid="issue:" + item.code, values=(status, item.title, detail), tags=("accepted" if accepted else "warning" if item.waivable else "pending",))
         if self.flow.state.get("drc") == "0":
             self.results.insert("", "end", iid="ok:drc", values=("Correcto", "DRC", "0 errores registrados"))
+        if self.flow.state.get("unrouted") == "0":
+            self.results.insert("", "end", iid="ok:connections", values=("Correcto", "Conexiones sin rutear", "0 pendientes, comprobadas automáticamente en Allegro"))
         if all(self.flow.state.get(key) == "0" for key in ("mask_pins", "mask_vias", "mask_extras", "mask_conflicts")):
             self.results.insert("", "end", iid="ok:mask", values=("Correcto", "Máscara de soldadura", "Pines y vías conformes; sin aberturas adicionales"))
         if not self.flow.policy.check_texts or self.flow.policy.excluded_refs:
@@ -365,8 +374,8 @@ class Assistant(tk.Tk):
         self.ticket = "-"
         self.board_var.set(str(path))
         self.placement_var.set(False)
-        self.connections_var.set(False)
         self.cam_var.set(False)
+        self.set_export_path(latest_export(path))
         profile_path = project_history(path) / "perfil.json"
         try:
             profile = Profile(**json.loads(profile_path.read_text(encoding="utf-8"))).validate()
@@ -434,7 +443,6 @@ class Assistant(tk.Tk):
                           float(self.signal_var.get().replace(",", ".")), float(self.width_var.get().replace(",", "."))).validate()
         if profile != self.flow.profile:
             self.flow.invalidate()
-            self.connections_var.set(False)
             self.cam_var.set(False)
             self.ticket = "-"
         self.flow.profile = profile
@@ -461,13 +469,11 @@ class Assistant(tk.Tk):
     def confirmations(self):
         if self.flow:
             self.flow.placement_confirmed = self.placement_var.get()
-            self.flow.connections_confirmed = self.connections_var.get()
             self.flow.cam_confirmed = self.cam_var.get()
             self.refresh_findings()
 
     def prepare_export(self):
         self.finalizing = True
-        self.connections_var.set(False)
         self.cam_var.set(False)
         self.run("review")
 
@@ -522,7 +528,7 @@ class Assistant(tk.Tk):
                     self.flow.persisted = payload
                     append_history(project_history(self.flow.board), {"time": time.time(), "action": "persisted_refs", **payload})
                     if payload["ok"]:
-                        self.write(f"Copia guardada comprobada: {payload['components']} componentes con una referencia de silkscreen cada uno. Confirma ahora las conexiones sin rutear y la revisión CAM.")
+                        self.write(f"Copia guardada comprobada: {payload['components']} componentes con una referencia de silkscreen cada uno. El recuento de conexiones pendientes está en la tabla; revisa colocación y CAM.")
                     else:
                         self.write("La copia guardada requiere revisión. Referencias ausentes: " + ", ".join(payload["missing"]) +
                                    ". Duplicadas: " + ", ".join(payload["duplicates"]))
@@ -550,11 +556,10 @@ class Assistant(tk.Tk):
             self.refresh_findings()
             return
         self.summary_var.set(f"Colocados: {result.get('placed', '?')} · Sin colocar: {result.get('unplaced', '?')} · "
+                             f"Sin rutear: {result.get('unrouted', '?')} · "
                              f"DRC registrados: {result.get('drc', '?')} · Rellenos pendientes: {result.get('shapes', '?')} · "
                              f"Referencias ausentes: {result.get('missing', '?')}")
-        self.connections_var.set(False)
         self.cam_var.set(False)
-        self.flow.connections_confirmed = False
         self.flow.cam_confirmed = False
         if action == "widths":
             folder = project_history(self.flow.board)
@@ -576,7 +581,9 @@ class Assistant(tk.Tk):
         elif action == "review" and self.finalizing:
             self.run("snapshot")
         elif action == "export":
+            self.set_export_path(result.get("zip"))
             try:
+                remember_export(self.flow.board, result["zip"])
                 annotate_package(result["zip"], self.export_record)
                 self.notice_var.set("ZIP generado. Las opciones y los avisos aceptados están incluidos en el informe del paquete.")
             except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
@@ -586,6 +593,21 @@ class Assistant(tk.Tk):
                        ("\nHay avisos: revisa logs e informe del ZIP." if result.get("warnings") != "0" else "\nAbre el ZIP en tu visor CAM antes de fabricar."))
         if action != "export":
             self.refresh_findings()
+
+    def set_export_path(self, path):
+        self.last_zip = Path(path) if path else None
+        self.export_path_var.set(str(self.last_zip) if self.last_zip else "Todavía no hay un ZIP exportado de esta placa")
+        for button in (self.export_folder_button, self.copy_export_button):
+            button.configure(state="normal" if self.last_zip and self.last_zip.is_file() else "disabled")
+
+    def open_export_folder(self):
+        if self.last_zip and self.last_zip.is_file():
+            os.startfile(self.last_zip.parent)
+
+    def copy_export_path(self):
+        if self.last_zip:
+            self.clipboard_clear()
+            self.clipboard_append(str(self.last_zip))
 
     def open_results(self):
         if self.flow and not self.demo:
@@ -599,7 +621,7 @@ class Assistant(tk.Tk):
     def _demo(self):
         self.board_var.set("Ejemplo · Fuente de alimentación / PlugInPSU.brd")
         self.connection_var.set("Demostración · sin conexión")
-        self.summary_var.set("Ejemplo: 15 colocados · 0 sin colocar · 0 DRC · conexiones por comprobar")
+        self.summary_var.set("Ejemplo: 15 colocados · 0 sin colocar · 0 DRC · 0 conexiones sin rutear")
         self.power_var.set("DCIN; +VIN; -VIN; 0; +12V; VEE")
         self.write("Vista de demostración. Recorre los seis pasos para conocer el asistente.\nLas utilidades existentes siguen funcionando de forma independiente.")
 

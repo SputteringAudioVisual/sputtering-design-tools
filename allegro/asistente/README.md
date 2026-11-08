@@ -1,4 +1,4 @@
-# Asistente externo de PCB · beta 0.1.1
+# Asistente externo de PCB · beta 0.1.2
 
 Ventana opcional para guiar el trabajo con Allegro 17.2: colocación → reglas → ruteo → revisión → fabricación. Ejecuta las utilidades SKILL 0.3.0 existentes mediante un complemento independiente y muestra sus resultados. No usa reconocimiento de pantalla ni simula pulsaciones sobre Allegro.
 
@@ -36,9 +36,17 @@ python app.py --demo
 3. **Preparar reglas.** Introduce los nombres reales de las redes de alimentación, separados por `;`, y los anchos de señal y alimentación. Aplica las reglas y la máscara. Los valores iniciales 0,40/0,80 mm son una propuesta que debes adaptar a corriente, cobre y fabricante; las reglas especiales se conservan. Aplicar reglas no redimensiona pistas existentes. `VEE` no se interpreta como masa; tampoco se unen retornos de entrada y salida de un convertidor aislado.
 4. **Rutear.** Usa el router manual o el autorouter de Allegro. Este asistente todavía no controla el autorouter. Comprueba islas de cobre y conexiones pendientes.
 5. **Revisar.** Actualiza rellenos y DRC, consulta las auditorías y comprueba las referencias de una copia guardada. Puedes recuperar referencias que falten y guardar el original con copia previa. Las referencias recuperadas se crean en el origen del componente y necesitan revisión de posición.
-6. **Exportar fabricación.** Pulsa **Revisar DRC y comprobar copia guardada**. Confirma en Allegro que quedan cero conexiones sin rutear y que revisarás los archivos en CAM. Luego crea el ZIP versionado. No edites la placa entre esa comprobación y la exportación; si cambias algo, repite la comprobación final.
+6. **Exportar fabricación.** Pulsa **Revisar DRC y comprobar copia guardada**. El asistente cuenta automáticamente conexiones sin rutear, pines y componentes sin colocar, DRC, rellenos y máscara. Comprueba las dos confirmaciones visuales (colocación/polaridades y revisión CAM) y crea el ZIP versionado. No edites la placa entre esa comprobación y la exportación; si cambias algo, repite la comprobación final.
 
-La tabla inferior distingue **Correcto**, **Pendiente**, **Revisar**, **Aceptado** y **Omitido**. La salida de SKILL queda plegada en **Ver detalle técnico**. **Abrir carpeta de resultados** muestra el historial de esa placa. Las tres confirmaciones finales están juntas en la pantalla de exportación; puedes trabajar directamente en ese paso si tu PCB ya está preparada.
+La tabla inferior distingue **Correcto**, **Pendiente**, **Revisar**, **Aceptado** y **Omitido**. La salida de SKILL queda plegada en **Ver detalle técnico**. **Abrir carpeta de resultados** muestra el historial de esa placa. Las confirmaciones visuales están juntas en la pantalla de exportación; puedes trabajar directamente en ese paso si tu PCB ya está preparada.
+
+Debajo de la tabla aparece **Último ZIP**, con su ruta completa, **Abrir carpeta exportada** y **Copiar ruta**. Al seleccionar de nuevo una placa, se recupera su última exportación registrada (también las realizadas con la beta anterior). Esta ruta identifica un paquete existente; no implica que se haya actualizado después de editar la placa.
+
+## Comprobación automática de conectividad
+
+El asistente lee los atributos nativos `net->unconnected` y `net->unplaced` documentados por Cadence para Allegro 17.2. Suma las conexiones pendientes por red, muestra qué redes tienen pendientes y comprueba por separado los pines sin colocar, porque el primer contador no los incluye. No cuenta líneas visibles ni usa `NET_RATT_COUNT` de extracta. La exportación vuelve a consultar estos datos después de actualizar rellenos y DRC.
+
+Con cero conexiones pendientes aparece **Correcto**; no hay casilla manual para confirmar ese número. Si hay pendientes conocidas que quieres conservar, puedes aceptar ese aviso con un motivo, y el ZIP conserva el número real: nunca se convierte en cero por aceptar el aviso. Un dato que Allegro no haya podido proporcionar se presenta como sin comprobar.
 
 ## Serigrafía opcional y avisos aceptados
 
@@ -66,7 +74,7 @@ Las carpetas `sessions` y `scratch` de la aplicación son intercambio y trabajo 
 
 ## Límites de esta beta
 
-- **Cero DRC no demuestra continuidad eléctrica.** La confirmación de cero conexiones sin rutear es manual. No se usa `NET_RATT_COUNT` como prueba: devolvió cero en una placa sin rutear durante las pruebas.
+- **Cero DRC y cero conexiones pendientes son comprobaciones distintas.** Ambas se leen automáticamente. El número de conexiones pendientes no certifica que las conexiones del esquema sean las deseadas ni que el diseño eléctrico sea correcto.
 - El asistente no analiza corrientes, estabilidad de una PSU, compatibilidad de footprints ni distancias de aislamiento. Ofrece recomendaciones y ejecuta comprobaciones concretas.
 - La limpieza destructiva de textos (`pcb_textos` / `pcbSilkAplicar`) no se ofrece como botón: se detectó una pérdida de referencias después de guardar. La auditoría y la recuperación de referencias permanecen disponibles y son voluntarias. La verificación externa usa `extracta` sobre una copia; las ausencias intencionadas se pueden excluir o aceptar.
 - Los resultados conocidos de componentes sin colocar, textos, DRC y máscara pueden aceptarse individualmente con un motivo. Las comprobaciones incompletas y los fallos de ejecución no se confunden con esos resultados.

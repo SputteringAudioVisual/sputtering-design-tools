@@ -6,6 +6,41 @@ from pathlib import Path
 import uuid
 import zipfile
 
+from workflow import project_history
+
+
+def valid_export(board, value):
+    path = Path(value).resolve()
+    return (path.is_relative_to(Path(board).resolve().parent) and path.is_file()
+            and path.suffix.lower() == ".zip" and path.stem.startswith(Path(board).stem + "_fab_v"))
+
+
+def latest_export(board):
+    folder = project_history(board)
+    try:
+        value = json.loads((folder / "ultima_exportacion.json").read_text(encoding="utf-8"))["zip"]
+        if valid_export(board, value):
+            return Path(value)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
+        for line in reversed((folder / "historial.jsonl").read_text(encoding="utf-8").splitlines()):
+            record = json.loads(line)
+            if record.get("action") == "export" and record.get("status") == "ok" and record.get("zip") and valid_export(board, record["zip"]):
+                return Path(record["zip"])
+    except (OSError, ValueError, TypeError):
+        pass
+    candidates = [path for path in (Path(board).parent / "Fabricacion").glob(Path(board).stem + "_fab_v*.zip") if valid_export(board, path)]
+    return max(candidates, key=lambda path: path.stat().st_mtime) if candidates else None
+
+
+def remember_export(board, archive):
+    if not valid_export(board, archive):
+        raise ValueError("El ZIP no corresponde a esta placa dentro del proyecto.")
+    folder = project_history(board)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "ultima_exportacion.json").write_text(json.dumps({"zip": str(Path(archive).resolve())}, ensure_ascii=False), encoding="utf-8")
+
 
 def annotate_package(archive_path, record):
     archive_path = Path(archive_path).resolve()

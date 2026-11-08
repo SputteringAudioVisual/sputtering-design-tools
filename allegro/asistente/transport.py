@@ -20,12 +20,14 @@ def parse_fields(path):
     for line in Path(path).read_text(encoding="cp1252").splitlines():
         key, sep, value = line.partition("\t")
         if sep:
-            if key in result and key not in ("net", "missing_ref"):
+            if key in result and key not in ("net", "missing_ref", "unrouted_net"):
                 raise ValueError("Respuesta incompleta o duplicada.")
             if key == "net":
                 result.setdefault("nets", []).append(value)
             elif key == "missing_ref":
                 result.setdefault("missing_refs", []).append(value)
+            elif key == "unrouted_net":
+                result.setdefault("unrouted_nets", []).append(value)
             else:
                 result[key] = value
     return result
@@ -58,7 +60,7 @@ class Mailbox:
             return False, "Esperando una respuesta completa"
         if state.get("token") != self.token:
             return False, "La sesión de Allegro ha cambiado"
-        if state.get("protocol") != "2":
+        if state.get("protocol") != "3":
             return False, "Recarga la conexión con Allegro para usar esta actualización"
         if board_key(state.get("board", "")) != board_key(self.board):
             return False, "Allegro tiene abierta otra placa"
@@ -75,13 +77,13 @@ class Mailbox:
         profile.validate()
         policy = (policy or ExportPolicy()).validate()
         waivers = waivers or []
-        allowed = {"unplaced", "drc", "mask_pins", "mask_vias", "mask_extras", "mask_conflicts", "missing"}
+        allowed = {"unplaced", "unrouted", "unplaced_pins", "drc", "mask_pins", "mask_vias", "mask_extras", "mask_conflicts", "missing"}
         for waiver in waivers:
             code, _, count = waiver.partition(":")
             if code not in allowed or not count.isdigit():
                 raise ValueError("Excepción no válida.")
         job = uuid.uuid4().hex
-        fields = ["PCBWA2", self.token, job, action, self.board,
+        fields = ["PCBWA3", self.token, job, action, self.board,
                   "|".join(profile.power_nets) or "-", str(profile.signal_mm), str(profile.power_mm), ticket,
                   "1" if policy.check_texts else "0", "|".join(policy.excluded_refs) or "-", "|".join(waivers) or "-"]
         payload = "\n".join(fields) + "\n"

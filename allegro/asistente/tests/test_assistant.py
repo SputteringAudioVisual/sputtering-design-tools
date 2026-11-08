@@ -9,20 +9,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from saved_board import check_tables
 from transport import Mailbox, parse_fields, skill_string
 from workflow import ExportPolicy, Profile, Workflow, board_key
-from package_report import annotate_package
+from package_report import annotate_package, latest_export, remember_export
 import hashlib
 import zipfile
 
 
 def good_state(board):
     return dict(board=board, status="ok", fresh_drc="0", unplaced="0", drc="0", shapes="0",
-                mask_pins="0", mask_vias="0", mask_extras="0", mask_conflicts="0", missing="0")
+                mask_pins="0", mask_vias="0", mask_extras="0", mask_conflicts="0", missing="0", unrouted="0", unplaced_pins="0")
 
 
 class Gates(unittest.TestCase):
     def test_zero_drc_does_not_prove_connections(self):
         flow = Workflow("C:/PSU/input.brd")
-        flow.accept("review", good_state(flow.board))
+        state = good_state(flow.board)
+        state["unrouted"] = "3"
+        state["unrouted_nets"] = ["GND: 3"]
+        flow.accept("review", state)
         flow.persisted = {"ok": True}
         flow.placement_confirmed = flow.cam_confirmed = True
         self.assertTrue(any("sin rutear" in reason for reason in flow.export_blockers()))
@@ -37,11 +40,10 @@ class Gates(unittest.TestCase):
         flow.accept("review", good_state(flow.board))
         flow.accept("snapshot", good_state(flow.board))
         flow.persisted = {"ok": True}
-        flow.placement_confirmed = flow.connections_confirmed = flow.cam_confirmed = True
+        flow.placement_confirmed = flow.cam_confirmed = True
         self.assertEqual([], flow.export_blockers())
         flow.accept("widths", good_state(flow.board))
         self.assertTrue(flow.export_blockers())
-        self.assertFalse(flow.connections_confirmed)
         self.assertFalse(flow.reviewed)
 
     def test_wrong_board_and_unknown_metrics(self):
@@ -55,7 +57,7 @@ class Gates(unittest.TestCase):
         flow = Workflow("C:/PSU/input.brd")
         flow.accept("review", good_state(flow.board))
         flow.persisted = {"ok": False, "missing": ["J1"]}
-        flow.placement_confirmed = flow.connections_confirmed = flow.cam_confirmed = True
+        flow.placement_confirmed = flow.cam_confirmed = True
         self.assertTrue(any("copia guardada" in reason for reason in flow.export_blockers()))
 
     def test_intentionally_hidden_connector_references_are_optional(self):
@@ -64,7 +66,7 @@ class Gates(unittest.TestCase):
         state.update(missing="5", missing_refs=["J1", "J2", "J3", "J4", "GND_+12V_RC1"])
         flow.accept("review", state)
         flow.persisted = dict(checked=True, ok=False, missing=state["missing_refs"], duplicates=[])
-        flow.placement_confirmed = flow.connections_confirmed = flow.cam_confirmed = True
+        flow.placement_confirmed = flow.cam_confirmed = True
         flow.policy = ExportPolicy(excluded_refs=state["missing_refs"].copy()).validate()
         self.assertEqual([], flow.export_blockers())
         flow.policy.excluded_refs.remove("J1")
@@ -77,7 +79,7 @@ class Gates(unittest.TestCase):
         state = good_state(flow.board)
         state.update(missing="5", drc="2", fresh_drc="2")
         flow.accept("review", state)
-        flow.placement_confirmed = flow.connections_confirmed = flow.cam_confirmed = True
+        flow.placement_confirmed = flow.cam_confirmed = True
         self.assertEqual(["drc"], [item.code for item in flow.findings()])
         flow.accept_finding("drc", "Dos avisos revisados en la placa")
         self.assertEqual([], flow.export_blockers())
@@ -119,7 +121,7 @@ class Protocol(unittest.TestCase):
         self.temp.cleanup()
 
     def heartbeat(self, board=None, token="abc"):
-        (self.box.root / "heartbeat.tsv").write_text(f"token\t{token}\nboard\t{board or self.box.board}\nprotocol\t2\n", encoding="cp1252")
+        (self.box.root / "heartbeat.tsv").write_text(f"token\t{token}\nboard\t{board or self.box.board}\nprotocol\t3\n", encoding="cp1252")
 
     def test_wrong_board_stale_or_changed_session_refused(self):
         self.heartbeat(board="C:/other.brd")
@@ -170,6 +172,25 @@ class Protocol(unittest.TestCase):
         request = (self.box.root / "request.tsv").read_text(encoding="cp1252").splitlines()
         self.assertEqual(["0", "J1", "drc:2"], request[-3:])
 
+    def test_zero_unrouted_needs_no_manual_connection_checkbox(self):
+        flow = Workflow("C:/PSU/input.brd", policy=ExportPolicy(False))
+        flow.accept("review", good_state(flow.board))
+        flow.placement_confirmed = flow.cam_confirmed = True
+        self.assertEqual([], flow.export_blockers())
+        flow.state["unrouted"] = "nil"
+        self.assertTrue(any(item.code == "unrouted" and not item.waivable for item in flow.findings()))
+
+    def test_known_unrouted_count_can_be_accepted_without_being_called_zero(self):
+        flow = Workflow("C:/PSU/input.brd", policy=ExportPolicy(False))
+        state = good_state(flow.board)
+        state["unrouted"] = "2"
+        flow.accept("review", state)
+        flow.placement_confirmed = flow.cam_confirmed = True
+        flow.accept_finding("unrouted", "Conector de prueba deliberadamente desconectado")
+        self.assertEqual([], flow.export_blockers())
+        self.assertIn("unrouted:2", flow.waiver_tokens())
+        self.assertEqual("2", flow.export_record()["checks"]["unrouted"])
+
 
 class PersistedReferences(unittest.TestCase):
     components = "A!REFDES!SYM_X!SYM_Y!\nS!R1!1!2!\nS!J1!3!4!\n"
@@ -192,6 +213,21 @@ class PersistedReferences(unittest.TestCase):
 
 
 class PackageReview(unittest.TestCase):
+    def test_latest_export_is_project_bound_and_recovers_existing_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            board = root / "PSU.brd"
+            folder = root / "Fabricacion"
+            folder.mkdir()
+            archive = folder / "PSU_fab_v001.zip"
+            archive.write_bytes(b"fixture")
+            (folder / "other_fab_v999.zip").write_bytes(b"other")
+            self.assertEqual(archive, latest_export(board))
+            remember_export(board, archive)
+            self.assertEqual(archive, latest_export(board))
+            with self.assertRaises(ValueError):
+                remember_export(board, folder / "other_fab_v999.zip")
+
     def test_report_manifest_hashes_and_original_payload_are_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

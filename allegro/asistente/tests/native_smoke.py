@@ -25,6 +25,9 @@ def main():
     parser.add_argument("--scratch", type=Path, required=True)
     parser.add_argument("--exercise-ui", action="store_true", help="Also test Tk button callbacks and create a TEST-ONLY ZIP on the disposable board")
     parser.add_argument("--exclude-refs", default="")
+    parser.add_argument("--min-unrouted", type=int, default=0)
+    parser.add_argument("--expect-unrouted", type=int)
+    parser.add_argument("--hide-rats", action="store_true")
     args = parser.parse_args()
     root = args.scratch.resolve()
     str(root).encode("ascii")
@@ -36,6 +39,9 @@ def main():
     shutil.copyfile(Path(__file__).resolve().parents[1] / "bridge" / "pcb_assistant_bridge.il", root / "bridge.il")
     box = Mailbox(root / "session", root / "input.brd")
     script = box.bootstrap(root / "bridge.il", "C:/SPB_Data/pcbenv/pcb_tools")
+    if args.hide_rats:
+        with script.open("a", encoding="cp1252") as stream:
+            stream.write("skill foreach(net axlDBGetDesign()->nets axlRatsnestBlank(net))\n")
     startup = subprocess.STARTUPINFO()
     startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 0
@@ -66,6 +72,9 @@ def main():
             _, result = received
             report["actions"][action] = result
             assert result["status"] == "ok", result
+            assert int(result["unrouted"]) >= args.min_unrouted, result
+            if args.expect_unrouted is not None:
+                assert int(result["unrouted"]) == args.expect_unrouted, result
             print(f"Automatic dispatch {action}: OK", flush=True)
         snapshot = report["actions"]["snapshot"]["snapshot"]
         report["persisted"] = verify_snapshot(snapshot, "C:/Cadence/SPB_17.2/tools/bin/extracta.exe", root / "scratch")
@@ -96,7 +105,8 @@ def main():
                 # The fixture can be intentionally unrouted. This confirms only
                 # the export integration, never approval for manufacturing.
                 assert window.flow.export_blockers(), "Export must still require manual confirmations"
-                window.connections_var.set(True)
+                if int(window.flow.state["unrouted"]) > 0:
+                    window.flow.accept_finding("unrouted", "Copia de prueba de software, NO aprobada para fabricar")
                 window.cam_var.set(True)
                 window.export()
                 assert box.pending, "Export callback did not send a request"
@@ -108,6 +118,9 @@ def main():
                     time.sleep(0.05)
                 state = window.flow.state
                 assert state["status"] == "ok" and state.get("zip"), state
+                assert window.last_zip and window.last_zip.is_file()
+                assert str(window.last_zip) == window.export_path_var.get()
+                assert str(window.export_folder_button["state"]) == "normal"
                 with zipfile.ZipFile(state["zip"]) as archive:
                     assert archive.testzip() is None
                     names = archive.namelist()
@@ -130,7 +143,8 @@ def main():
                         time.sleep(0.05)
                     window.flow.accept_finding("missing", "Referencias intencionadamente ausentes en la copia de prueba")
                     window.placement_var.set(True)
-                    window.connections_var.set(True)
+                    if int(window.flow.state["unrouted"]) > 0:
+                        window.flow.accept_finding("unrouted", "Copia de prueba de software, NO aprobada para fabricar")
                     window.cam_var.set(True)
                     window.export()
                     assert box.pending, window.flow.export_blockers()

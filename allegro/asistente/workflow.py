@@ -6,7 +6,7 @@ import hashlib
 import json
 import time
 
-VERSION = "0.1.1-beta"
+VERSION = "0.1.2-beta"
 STEPS = (
     "1 · Abrir y conectar", "2 · Colocar componentes", "3 · Preparar reglas",
     "4 · Rutear", "5 · Revisar la placa", "6 · Exportar fabricación",
@@ -72,7 +72,6 @@ class Workflow:
     board: str
     profile: Profile = field(default_factory=Profile)
     placement_confirmed: bool = False
-    connections_confirmed: bool = False
     cam_confirmed: bool = False
     state: dict = field(default_factory=dict)
     persisted: dict = field(default_factory=dict)
@@ -81,7 +80,6 @@ class Workflow:
     waivers: dict = field(default_factory=dict)
 
     def invalidate(self):
-        self.connections_confirmed = False
         self.cam_confirmed = False
         self.persisted = {}
         self.reviewed = False
@@ -109,13 +107,17 @@ class Workflow:
         if self.state.get("status") != "ok":
             add("operation", "Revisión sin terminar", "Conecta la placa y espera el resultado de Allegro.")
         for key, label in (("unplaced", "Componentes sin colocar"), ("drc", "DRC detectados"),
+                           ("unrouted", "Conexiones sin rutear"), ("unplaced_pins", "Pines sin colocar"),
                            ("shapes", "Rellenos pendientes de actualizar"), ("mask_pins", "Pines con máscara pendiente"),
                            ("mask_vias", "vías con abertura"), ("mask_extras", "aberturas adicionales de máscara"),
                            ("mask_conflicts", "vías expuestas por otras aberturas")):
             value = str(self.state.get(key, ""))
             if value != "0":
                 known = value.isdigit()
-                add(key, label[0].upper() + label[1:], f"Cantidad: {value}." if known else "Todavía sin comprobar.",
+                detail = f"Cantidad: {value}." if known else "Todavía sin comprobar. Recarga la conexión y repite la revisión."
+                if key == "unrouted" and known and self.state.get("unrouted_nets"):
+                    detail += " Redes: " + "; ".join(self.state["unrouted_nets"])
+                add(key, label[0].upper() + label[1:], detail,
                     known and key != "shapes", value)
         if self.policy.check_texts:
             missing = self.relevant_refs(self.persisted.get("missing", self.state.get("missing_refs", [])))
@@ -132,8 +134,6 @@ class Workflow:
             add("copy_mismatch", "La copia no coincide con Allegro", "Repite la comprobación final con la placa correcta.")
         if not self.placement_confirmed:
             add("placement", "Confirmar colocación", "Marca «He revisado colocación, polaridades y conectores» en esta pantalla.")
-        if not self.connections_confirmed:
-            add("connections", "Confirmar conexiones sin rutear", "Comprueba Allegro y marca la casilla correspondiente.")
         if not self.cam_confirmed:
             add("cam", "Confirmar revisión CAM", "Marca que revisarás Gerber y taladros antes de fabricar.")
         return findings
@@ -156,7 +156,7 @@ class Workflow:
         return [f"{item.title}: {item.detail}" for item in self.findings() if not self.is_accepted(item)]
 
     def waiver_tokens(self):
-        native_codes = {"unplaced", "drc", "mask_pins", "mask_vias", "mask_extras", "mask_conflicts", "missing"}
+        native_codes = {"unplaced", "unrouted", "unplaced_pins", "drc", "mask_pins", "mask_vias", "mask_extras", "mask_conflicts", "missing"}
         return [f"{item.code}:{item.value}" for item in self.findings()
                 if item.code in native_codes and self.is_accepted(item)]
 

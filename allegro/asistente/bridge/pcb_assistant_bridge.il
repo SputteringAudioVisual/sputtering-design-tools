@@ -22,7 +22,7 @@ procedure(pcbwaHeartbeat()
   let((f)
     f=outfile(strcat(pcbwaRoot "/heartbeat.tsv"))
     when(f
-      fprintf(f "token\t%s\nboard\t%s\nprotocol\t2\n" pcbwaToken or(pcbwaBoard() "-"))
+      fprintf(f "token\t%s\nboard\t%s\nprotocol\t3\n" pcbwaToken or(pcbwaBoard() "-"))
       close(f))))
 
 procedure(pcbwaTimerCB(window timer elapsed)
@@ -58,8 +58,23 @@ procedure(pcbwaStop()
   pcbwaTimer=nil pcbwaPending=nil
   t)
 
+; Documented net attributes, algroskill/02dbdesc.html, table Net Attributes:
+; unconnected = remaining physical connections, excluding unplaced symbols.
+; unplaced = unplaced pins. Do not use NET_RATT_COUNT or visible ratsnest lines.
+procedure(pcbwaConnectivity()
+  prog((remaining unplacedPins details known)
+    remaining=0 unplacedPins=0 known=t
+    foreach(net axlDBGetDesign()->nets
+      if(numberp(net->unconnected) && net->unconnected>=0 && numberp(net->unplaced) && net->unplaced>=0 then
+        remaining=remaining+fix(net->unconnected)
+        unplacedPins=unplacedPins+fix(net->unplaced)
+        when(net->unconnected>0
+          details=cons(sprintf(nil "%s: %d" net->name fix(net->unconnected)) details))
+      else known=nil))
+    return(list(if(known then remaining else nil) if(known then unplacedPins else nil) reverse(details)))))
+
 procedure(pcbwaCollect(f)
-  prog((design placed unplaced missing mask missingRefs ref)
+  prog((design placed unplaced missing mask missingRefs ref connectivity)
     design=axlDBGetDesign()
     unless(design error("PCB ASISTENTE: no hay placa abierta."))
     placed=0 unplaced=0
@@ -75,18 +90,21 @@ procedure(pcbwaCollect(f)
     fprintf(f "placed\t%d\nunplaced\t%d\nmissing\t%d\n" placed unplaced car(missing))
     foreach(ref missingRefs fprintf(f "missing_ref\t%s\n" ref))
     fprintf(f "drc\t%L\nshapes\t%L\n" axlDRCGetCount() axlDBDynamicShapes(nil))
+    connectivity=pcbwaConnectivity()
+    fprintf(f "unrouted\t%L\nunplaced_pins\t%L\n" car(connectivity) cadr(connectivity))
+    foreach(detail nth(2 connectivity) fprintf(f "unrouted_net\t%s\n" detail))
     fprintf(f "mask_pins\t%d\nmask_vias\t%d\nmask_extras\t%d\nmask_conflicts\t%d\n"
       nth(2 mask) nth(3 mask) nth(4 mask) nth(5 mask))
     foreach(net design->nets fprintf(f "net\t%s\n" net->name))
     fprintf(f "core\t%s\nsignal_mm\t%.3f\npower_mm\t%.3f\n" pcbToolsVersion pcbSignalWidthMM pcbPowerWidthMM)
     fprintf(f "power_nets\t%s\n" buildString(pcbPowerNets "|"))
-    return(list(unplaced car(missing) mask missingRefs))))
+    return(list(unplaced car(missing) mask missingRefs connectivity))))
 
 procedure(pcbwaAllowed(code count waivers)
   count==0 || member(sprintf(nil "%s:%d" code count) waivers))
 
 procedure(pcbwaDo(action nets signal power ticket job f checkTexts excluded waivers)
-  prog((result snapshot checks mask missingCount drc)
+  prog((result snapshot checks mask missingCount drc connectivity)
     case(action
       ("inspect"
         pcbSilkAuditar() pcbAnchosAuditar() pcbFabAuditar())
@@ -128,6 +146,11 @@ procedure(pcbwaDo(action nets signal power ticket job f checkTexts excluded waiv
         unless(pcbwaAllowed("drc" drc waivers)
           error("PCB ASISTENTE: DRC no aceptados (%d). Revisa el resumen del asistente." drc))
         checks=pcbwaCollect(f) mask=nth(2 checks)
+        connectivity=nth(4 checks)
+        unless(numberp(car(connectivity)) && numberp(cadr(connectivity))
+          error("PCB ASISTENTE: no se pudo comprobar la conectividad."))
+        unless(pcbwaAllowed("unrouted" car(connectivity) waivers) && pcbwaAllowed("unplaced_pins" cadr(connectivity) waivers)
+          error("PCB ASISTENTE: hay conexiones o pines pendientes no aceptados. Revisa el resumen."))
         missingCount=length(setof(ref nth(3 checks) !member(upperCase(ref) excluded)))
         unless(pcbwaAllowed("unplaced" car(checks) waivers) &&
           (!checkTexts || pcbwaAllowed("missing" missingCount waivers)) &&
@@ -161,7 +184,7 @@ procedure(pcbwaDispatch()
     magic=nth(0 result) token=nth(1 result) job=nth(2 result) action=nth(3 result)
     board=nth(4 result) nets=nth(5 result) signal=nth(6 result) power=nth(7 result) ticket=nth(8 result)
     checkTexts=nth(9 result) excluded=nth(10 result) waivers=nth(11 result)
-    unless(equal(magic "PCBWA2") && equal(token pcbwaToken) && member(checkTexts '("0" "1")) &&
+    unless(equal(magic "PCBWA3") && equal(token pcbwaToken) && member(checkTexts '("0" "1")) &&
       strlen(job)==32 && rexMatchp("^[a-f0-9]+$" job) &&
       member(action '("inspect" "widths" "mask" "references" "review" "snapshot" "save" "export"))
       pcbwaPending=nil return(nil))
