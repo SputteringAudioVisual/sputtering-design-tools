@@ -19,11 +19,12 @@ if (-not $PythonPath) {
     $PythonPath = (Get-Command python -ErrorAction Stop).Source
 }
 $PythonPath = [IO.Path]::GetFullPath($PythonPath)
-& $PythonPath -c 'import sys,tkinter; assert sys.version_info >= (3,10); t=tkinter.Tcl(); print("Python y biblioteca grafica: OK")'
+& $PythonPath -c 'import sys,tkinter; assert sys.version_info >= (3,10); tkinter.Tcl()'
 if ($LASTEXITCODE -ne 0) { throw 'Se necesita Python 3.10 o posterior con Tkinter funcionando.' }
+Write-Output 'Python y biblioteca grafica: OK'
 $pythonWindow = Join-Path (Split-Path -Parent $PythonPath) 'pythonw.exe'
 if (-not (Test-Path -LiteralPath $pythonWindow -PathType Leaf)) { throw 'No se encuentra pythonw.exe junto a Python.' }
-$files = @('app.py','iniciar.pyw','workflow.py','transport.py','saved_board.py','package_report.py','traceability.py','README.md','VALIDACION.md','core_baseline.json','bridge/pcb_assistant_bridge.il',
+$files = @('app.py','iniciar.pyw','workflow.py','transport.py','saved_board.py','package_report.py','traceability.py','editor_handoff.py','README.md','VALIDACION.md','core_baseline.json','bridge/pcb_assistant_bridge.il',
     'documentacion/CONTRATO_TRAZABILIDAD_PCB.md','documentacion/fabrication-manifest-v1.schema.json','documentacion/fabrication-manifest-v1.example.json')
 $before = @{}
 Get-ChildItem -LiteralPath $core -File | ForEach-Object { $before[$_.Name] = (Get-FileHash -LiteralPath $_.FullName).Hash }

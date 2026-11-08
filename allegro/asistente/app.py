@@ -622,6 +622,16 @@ class Assistant(tk.Tk):
                 return
             self.write("Paquete generado: " + result.get("zip", "(ver informe)") +
                        ("\nHay avisos: revisa logs e informe del ZIP." if result.get("warnings") != "0" else "\nAbre el ZIP en tu visor CAM antes de fabricar."))
+            if messagebox.askyesno("Liberación lista",
+                f"La liberación {entry['release_label']} de la PCB {entry['pcb_revision']} ya está sellada.\n\n"
+                "¿Quieres abrir ahora este BRD y este ZIP exacto en el Editor PCB y serigrafías?",
+                parent=self):
+                try:
+                    from editor_handoff import launch_editor
+                    launch_editor(self.flow.board, result['zip'])
+                except (OSError, ValueError, KeyError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+                    messagebox.showerror("No se pudo abrir el editor",
+                        str(exc)+"\n\nPuedes abrir «Editor PCB y serigrafías» desde «Apps de Luis» y elegir el mismo archivo .brd.",parent=self)
         if action != "export":
             self.refresh_findings()
 

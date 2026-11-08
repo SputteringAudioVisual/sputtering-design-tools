@@ -42,6 +42,17 @@ La tabla inferior distingue **Correcto**, **Pendiente**, **Revisar**, **Aceptado
 
 Debajo de la tabla aparece **Último ZIP**, con su ruta completa, **Abrir carpeta exportada** y **Copiar ruta**. Al seleccionar de nuevo una placa, se recupera su última exportación registrada (también las realizadas con la beta anterior). Esta ruta identifica un paquete existente; no implica que se haya actualizado después de editar la placa.
 
+Al sellar una nueva F, el asistente ofrece abrir **ese BRD y ese ZIP exacto** en el Editor PCB y serigrafías. El editor prepara el proyecto del módulo, conserva la procedencia y ofrece abrir el frontal en otra ventana. El ZIP no se elige por el nombre de un paquete antiguo de la carpeta.
+
+### Pasar al editor de serigrafía y al frontal
+
+1. Termina la revisión y crea la liberación desde **Exportar fabricación**.
+2. En **Liberación lista**, acepta abrirla en el editor. El asistente entrega las rutas exactas del BRD seleccionado y del ZIP que acaba de sellar; no busca otro paquete por nombre.
+3. El editor abre o prepara el módulo autocontenido, carga la fabricación y conserva la identidad, revisión y F de origen. Desde allí puedes aceptar abrir el frontal en otra ventana del mismo proyecto.
+4. Si prefieres continuar más tarde, rechaza la apertura: el ZIP queda sellado y accesible en **Último ZIP**. Si falla el arranque del editor, el paquete ya generado se conserva; consulta el mensaje y abre el editor manualmente con esa PCB y ese ZIP.
+
+La apertura directa utiliza el acceso instalado **`Apps de Luis/Editor PCB y serigrafias.lnk`** del escritorio. Ese acceso debe apuntar al editor actual; el asistente lo consulta y no lo modifica. En otro equipo será necesario instalar ese acceso para usar esta integración. El editor sigue siendo una aplicación separada: sus cambios generan una E nueva, sin sobrescribir la F.
+
 ## Placa, revisión y liberación de fabricación
 
 Antes de tu primera exportación nueva pulsa **Placa y revisión…**. Declara el nombre y una revisión como `1.0` o la que realmente corresponda; el programa no la deduce del nombre del archivo. Se crea una identidad estable para esa PCB física. Si renombras o recuperas el BRD, elige en ese diálogo la identidad existente para conservarla. El frontal y la PCB de componentes son placas diferentes; no deben compartir identidad solo por pertenecer al mismo módulo.
@@ -123,5 +134,7 @@ python -m unittest discover -s tests -v
 ```
 
 `workflow.py` contiene las condiciones de avance/exportación, `transport.py` el intercambio de mensajes, `saved_board.py` la lectura independiente de referencias guardadas, `app.py` la ventana y `bridge/pcb_assistant_bridge.il` el complemento de Allegro. Las solicitudes contienen datos y una acción de una lista cerrada; no se evalúa código recibido. El temporizador solo publica el estado de conexión y solicita un comando; las operaciones de base de datos se ejecutan fuera de él.
+
+`editor_handoff.py` resuelve el acceso de escritorio y construye la apertura con `--board` y `--fabrication`. Sus pruebas comprueban que se transmiten ambos archivos exactos, que se usa el directorio del acceso sin reescribirlo y que un ZIP ausente impide lanzar el proceso. El instalador comprueba Tcl/Tk con una expresión sin comillas internas en el argumento de Python, evitando el fallo de interpretación de PowerShell; el mensaje de éxito se escribe desde PowerShell.
 
 Consulta [VALIDACION.md](VALIDACION.md) para saber qué está probado y qué sigue pendiente. Esta beta añade una capa opcional; no reemplaza la versión estable de las utilidades.

@@ -2,6 +2,8 @@
 
 Entorno: Windows, Python 3.12, Allegro PCB Designer 17.2 P028, utilidades 0.3.0. Pruebas sobre copias de placas; no se modifica la PSU original.
 
+Último cierre de progreso: **8 de noviembre de 2026**. La versión instalada incorpora el paso opcional del ZIP recién sellado al editor de serigrafía y el instalador con la comprobación de Tk corregida.
+
 ## Comprobado
 
 - 20 pruebas automáticas: bloqueo con datos desconocidos o comprobaciones pendientes, conectividad automática separada de DRC, aceptación de conexiones pendientes manteniendo su número real, invalidación y cambio de cantidades; exclusiones específicas de referencias y desactivación opcional de su revisión; conservación de los demás controles; rechazo de otra placa/sesión; respuesta incompleta; una única operación pendiente; rutas con `ñ`; anchos no finitos; acciones no permitidas; referencias guardadas ausentes o duplicadas; informe de decisiones en ZIP con CRC, manifiesto y hashes coherentes; recuperación de la ruta del último ZIP de cada placa.
@@ -18,6 +20,8 @@ Entorno: Windows, Python 3.12, Allegro PCB Designer 17.2 P028, utilidades 0.3.0.
 - Trazabilidad: **29 pruebas automáticas** en total. Se comprueban identidad declarada sin atribuir metadatos a históricos, vínculo explícito tras renombrar un BRD, copia exacta del estado en memoria distinta del archivo guardado, inventario completo con alias y funciones, imposibilidad de reanotar un ZIP sellado, F distintas con la misma revisión PCB, comparación de archivos, cambio del archivo guardado, revisión distinta, traslado del proyecto y no reutilización de etiquetas fallidas.
 - Interoperabilidad: el editor valida el ejemplo sintético común y produce F001 → E001 → E002; el lector del productor verifica ambos derivados, hashes ZIP/manifiesto del padre, identidad/revisión y raíz preservadas. No se distribuyen las PCB reales de prueba.
 - Allegro real: dos exportaciones nuevas sobre una copia con identidad explícitamente declarada de prueba. El snapshot se captura con siete films ya configurados antes de generar Gerber. Se verifican los UUIDs y F, inventario exhaustivo de 17 archivos además del manifiesto, versiones reales de Allegro/las utilidades, índices y fuentes portables. El original conserva su hash y no se modifican sus ZIP anteriores.
+- Cierre de integración: **32 pruebas del asistente pasan** (las 29 anteriores y tres del paso al editor). Se verifican las rutas exactas de PCB/ZIP, el uso del acceso registrado sin modificarlo y la ausencia de lanzamiento si el ZIP falta. Estas tres pruebas usan un proceso simulado; el chat coordinador verificó por separado el recorrido integrado y las 185 pruebas del editor.
+- La apertura real de una ventana Tk y su cierre han pasado en el entorno normal de escritorio. El anterior error de lectura de Tcl dentro de la ejecución restringida no exigió reinstalar Python. El instalador evita las comillas internas que provocaban el otro fallo de PowerShell al comprobar Tk.
 
 ## Pendiente de cerrar antes de considerarlo estable
 
