@@ -16,6 +16,8 @@ La carpeta [allegro](allegro/README.md) incorpora comandos SKILL para Allegro PC
 
 La [referencia técnica](allegro/README.md) detalla los valores iniciales y las limitaciones; [VALIDACION.md](allegro/VALIDACION.md) recoge las pruebas y la confirmación en una sesión real. Una única implementación en `allegro/` sirve a todos los proyectos. El código del editor Gerber permanece intacto.
 
+También está disponible el [asistente externo de PCB, beta 0.2.0](allegro/asistente/README.md): una ventana opcional que guía colocación, reglas, ruteo, revisión y exportación, ejecutando las utilidades existentes mediante botones. Se instala por separado y conserva los comandos actuales. Incluye auditorías automáticas, textos opcionales, aceptación de avisos, acceso al ZIP y una identidad estable de placa con revisión PCB y liberaciones de fabricación selladas, comparables y recuperables. El [contrato de trazabilidad](docs/CONTRATO_TRAZABILIDAD_PCB.md) alinea esas liberaciones con las ediciones del editor Gerber, sin atribuir metadatos nuevos a ZIP históricos. El autorouter se usa dentro de Allegro; la revisión visual de colocación y CAM sigue correspondiendo al usuario. Consulta sus [pruebas y límites](allegro/asistente/VALIDACION.md) antes de usarlo en una placa de trabajo.
+
 ## Ejecución del editor actual
 
 Requiere Python con Tkinter, Pillow y NumPy:

@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SputteringAudioVisual/sputtering-design-tools/docs/fabrication-manifest-v1.schema.json",
+  "title": "Sputtering fabrication manifest v1",
+  "type": "object",
+  "required": ["schema", "project_id", "project_name", "pcb_revision", "fabrication_release_id", "release_kind", "release_label", "base_fabrication_release_id", "parent_release_id", "parent_archive_sha256", "parent_manifest_sha256", "source_board_sha256", "created_utc", "tools", "profile", "release_status", "provenance_status", "files"],
+  "properties": {
+    "schema": {"const": "sputtering.fabrication.v1"},
+    "project_id": {"$ref": "#/$defs/nullable_uuid"},
+    "project_name": {"type": ["string", "null"], "minLength": 1},
+    "module_id": {"$ref": "#/$defs/nullable_uuid"},
+    "pcb_revision": {"type": ["string", "null"], "pattern": "^[1-9][0-9]*\\.(0|[1-9][0-9]*)$"},
+    "fabrication_release_id": {"$ref": "#/$defs/uuid"},
+    "release_kind": {"enum": ["allegro_original", "gerber_derived"]},
+    "release_label": {"type": "string", "pattern": "^[FE][0-9]{3,}$"},
+    "fabrication_sequence": {"type": "integer", "minimum": 1},
+    "fabrication_edit_sequence": {"type": "integer", "minimum": 1},
+    "base_fabrication_release_id": {"$ref": "#/$defs/nullable_uuid"},
+    "parent_release_id": {"$ref": "#/$defs/nullable_uuid"},
+    "parent_archive_sha256": {"$ref": "#/$defs/nullable_sha256"},
+    "parent_manifest_sha256": {"$ref": "#/$defs/nullable_sha256"},
+    "source_board_sha256": {"$ref": "#/$defs/nullable_sha256"},
+    "source_saved_board_sha256": {"$ref": "#/$defs/nullable_sha256"},
+    "source_saved_board_observed_utc": {"type": ["string", "null"], "format": "date-time"},
+    "source_saved_board_observation": {"const": "export_requested"},
+    "source_board": {
+      "type": ["object", "null"],
+      "required": ["project_relative_path", "sha256", "bytes"],
+      "properties": {
+        "project_relative_path": {"$ref": "#/$defs/relative_path"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "created_utc": {"type": "string", "format": "date-time"},
+    "tools": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["name", "version"], "properties": {"name": {"type": "string", "minLength": 1}, "version": {"type": ["string", "null"]}}}},
+    "profile": {"type": "object"},
+    "release_status": {"enum": ["pending_cam_review", "pending_cam_review_with_warnings"]},
+    "provenance_status": {"enum": ["verified", "incomplete"]},
+    "files": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/file"}}
+  },
+  "allOf": [
+    {"if": {"properties": {"release_kind": {"const": "allegro_original"}}}, "then": {
+      "required": ["fabrication_sequence", "source_board"],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/uuid"}, "project_name": {"type": "string", "minLength": 1},
+        "pcb_revision": {"type": "string"}, "release_label": {"pattern": "^F[0-9]{3,}$"},
+        "source_board_sha256": {"$ref": "#/$defs/sha256"}, "source_board": {"type": "object"},
+        "base_fabrication_release_id": {"$ref": "#/$defs/uuid"},
+        "parent_release_id": {"type": "null"}, "parent_archive_sha256": {"type": "null"}, "parent_manifest_sha256": {"type": "null"},
+        "provenance_status": {"const": "verified"}
+      }
+    }},
+    {"if": {"properties": {"release_kind": {"const": "gerber_derived"}}}, "then": {
+      "required": ["fabrication_edit_sequence"],
+      "properties": {"release_label": {"pattern": "^E[0-9]{3,}$"}, "parent_archive_sha256": {"$ref": "#/$defs/sha256"}}
+    }}
+  ],
+  "$defs": {
+    "uuid": {"type": "string", "format": "uuid", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "nullable_uuid": {"anyOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nullable_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "relative_path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*\\\\)(?!.*:)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+    "file": {
+      "type": "object", "required": ["path", "name", "bytes", "sha256", "role", "layer"],
+      "properties": {
+        "path": {"$ref": "#/$defs/relative_path"}, "name": {"$ref": "#/$defs/relative_path"},
+        "bytes": {"type": "integer", "minimum": 0}, "sha256": {"$ref": "#/$defs/sha256"},
+        "role": {"enum": ["copper.top", "copper.bottom", "soldermask.top", "soldermask.bottom", "silkscreen.top", "silkscreen.bottom", "profile", "drill.plated_and_nonplated", "drill.plated", "drill.nonplated", "route.plated", "route.nonplated", "report", "config", "other"]},
+        "layer": {"type": ["string", "null"]}
+      }
+    }
+  },
+  "$comment": "También validar semánticamente: alias path==name, IDs raíz/padre coherentes, etiquetas y secuencias coherentes, UTC, inventario exhaustivo sin manifest.json, rutas seguras, tamaño y SHA256 de cada miembro. Un hash correcto no certifica el diseño."
+}
