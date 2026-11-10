@@ -106,4 +106,3 @@ class PackageTests(unittest.TestCase):
             with FabricationExport(root/'out', {'top.art': b'original'}) as package:
                 with self.assertRaises(ValueError): package.path_for('../outside.art')
                 with self.assertRaises(ValueError): package.path_for('manifest.json')
-

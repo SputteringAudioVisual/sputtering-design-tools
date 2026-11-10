@@ -9,7 +9,7 @@ from xml.sax.saxutils import escape
 import zipfile
 
 from gerber_silkscreen_editor import GerberLayer
-from drill import DrillLayer, parameter_format
+from drill import DrillLayer, RouteLayer, parameter_format
 from panel_fonts import FONTS, FONT_WEIGHTS
 
 HEIGHT_MM = 128.5
@@ -26,7 +26,7 @@ HOLE_PRESETS = {
 }
 GERBER_EXTENSIONS = {'.gbr', '.ger', '.art', '.gto', '.gbo', '.gko', '.gm1',
                      '.gtl', '.gbl', '.gts', '.gbs', '.pho'}
-DRILL_EXTENSIONS = {'.drl', '.xln', '.exc'}
+DRILL_EXTENSIONS = {'.drl', '.xln', '.exc', '.rou'}
 
 
 def number(value, minimum=None, maximum=None):
@@ -83,7 +83,8 @@ class Reference:
 
     def __post_init__(self):
         if Path(self.name).suffix.lower() in DRILL_EXTENSIONS:
-            self.layer = DrillLayer(self.content, self.coord_format)
+            reader = RouteLayer if Path(self.name).suffix.lower() == '.rou' else DrillLayer
+            self.layer = reader(self.content, self.coord_format)
             self.coord_format = self.layer.format_x
             return
         # Do not silently display unsupported constructs at misleading dimensions.
@@ -155,24 +156,21 @@ def load_references(paths):
             continue
         try:
             if path.suffix.lower() == '.zip':
-                with zipfile.ZipFile(path) as archive:
-                    for member in archive.infolist():
-                        if member.is_dir() or Path(member.filename).suffix.lower() not in GERBER_EXTENSIONS | DRILL_EXTENSIONS:
-                            continue
-                        if member.file_size > 30_000_000:
-                            errors.append(f"{member.filename}: supera 30 MB.")
-                            continue
-                        try:
-                            fmt = None
-                            if Path(member.filename).suffix.lower() in DRILL_EXTENSIONS:
-                                params_name = str(Path(member.filename).with_name('nc_param.txt')).replace('\\', '/')
-                                for candidate in (params_name, 'parametros/nc_param.txt'):
-                                    if candidate in archive.namelist():
-                                        fmt = parameter_format(archive.read(candidate).decode('utf-8-sig'))
-                                        break
-                            references.append(Reference(member.filename, archive.read(member).decode('utf-8-sig'), coord_format=fmt))
-                        except (ValueError, UnicodeError) as error:
-                            errors.append(str(error))
+                from package_integrity import read_archive
+                payload,manifest=read_archive(path);loaded=[];package_errors=[]
+                for name,raw in payload.items():
+                    if Path(name).suffix.lower() not in GERBER_EXTENSIONS | DRILL_EXTENSIONS:continue
+                    try:
+                        fmt=None
+                        if Path(name).suffix.lower() in DRILL_EXTENSIONS:
+                            params_name=str(Path(name).with_name('nc_param.txt')).replace('\\','/')
+                            for candidate in (params_name,'parametros/nc_param.txt'):
+                                if candidate in payload:
+                                    fmt=parameter_format(payload[candidate].decode('utf-8-sig'));break
+                        loaded.append(Reference(name,raw.decode('utf-8-sig'),coord_format=fmt))
+                    except (ValueError,UnicodeError) as error:package_errors.append(str(error))
+                if package_errors:errors.extend(package_errors)
+                if not package_errors or not manifest:references.extend(loaded)
             else:
                 fmt = None
                 if path.suffix.lower() in DRILL_EXTENSIONS:
@@ -273,8 +271,9 @@ class PanelDocument:
         return geometry_bounds(self.layers[self.reference_index].layer, outline=True)
 
     def choose_outline(self):
+        from layer_identity import layer_role
         for index, ref in enumerate(self.layers):
-            if re.search(r'outline|board.?outline|profile|edge.?cuts|\.gko$|\.gm1$', ref.name, re.I):
+            if layer_role(ref.name,ref.layer)=='OUTLINE':
                 self.reference_index = index
                 return True
         self.reference_index = 0
@@ -332,8 +331,9 @@ class PanelDocument:
 
     def refdes_labels(self, data, rules, size=2.5, gap=1.0, position='above', font='sans',
                      prefix='',suffix='',remove_numbers=False,dx=0,dy=0,
-                     update_existing=False,keep_positions=True,keep_text=True,keep_size=False):
-        """Propose labels for the same mechanically registered components as holes."""
+                     update_existing=False,keep_positions=True,keep_text=True,keep_size=False,
+                     _registered=None):
+        """Propose a refdes for every placed component; unregistered anchors need review."""
         from footprint_holes import proposals
         size, gap = number(size, .5, 20), number(gap, 0, 50)
         if position not in {'above', 'below','left','right'}:
@@ -343,25 +343,31 @@ class PanelDocument:
         if not all(isinstance(v,bool) for v in (update_existing,keep_positions,keep_text,keep_size)):
             raise ValueError('Opciones de reimportación no válidas.')
         drills = [(p['x'],p['y']) for r in self.layers if r.coord_format for p in r.layer.drawables]
-        items, skipped = proposals(data, rules, self.reference_bounds(), drills)
+        items, skipped = _registered if _registered is not None else proposals(data, rules, self.reference_bounds(), drills)
+        registered = {item['refdes']: item for item in items}
         holes = {e.source_ref: e for e in self.elements if e.kind == 'hole' and e.source_ref}
         result = []
-        for item in items:
-            hole = holes.get(item['refdes'])
-            x = hole.x if hole else item['x_mm']+self.pcb_dx
-            cy = hole.y if hole else item['y_mm']+self.pcb_dy
-            radius = (hole.size if hole else item['diameter_mm'])/2
-            name=re.sub(r'\d+$','',item['refdes']) if remove_numbers else item['refdes']
+        for component in data.get('components', []):
+            if component.get('side') not in {'TOP', 'BOTTOM'}:
+                continue
+            ref = component['refdes']
+            item = registered.get(ref)
+            footprint = component['footprint']
+            hole = holes.get(ref)
+            x = hole.x if hole else (item['x_mm'] if item else component['x_mm'])+self.pcb_dx
+            cy = hole.y if hole else (item['y_mm'] if item else component['y_mm'])+self.pcb_dy
+            radius = hole.size/2 if hole else item['diameter_mm']/2 if item else 0
+            name=re.sub(r'\d+$','',ref) if remove_numbers else ref
             text=str(prefix)+name+str(suffix)
             label=Element('text', x, cy, size, text,
-                                  source_ref=item['refdes'], source_footprint=item['footprint'],
+                                  source_ref=ref, source_footprint=footprint,
                                   board_x=x-self.pcb_dx, board_y=cy-self.pcb_dy, font=font)
-            owned=[e for e in self.elements if e.kind=='text' and e.source_ref==item['refdes']]
+            owned=[e for e in self.elements if e.kind=='text' and e.source_ref==ref]
             if update_existing and owned:
-                if len(owned)!=1:raise ValueError(f"{item['refdes']}: hay varias etiquetas vinculadas; revisa las duplicadas.")
+                if len(owned)!=1:raise ValueError(f"{ref}: hay varias etiquetas vinculadas; revisa las duplicadas.")
                 old=owned[0]
                 label=replace(old,size=old.size if keep_size else size,font=font,text=old.text if keep_text else text,
-                              source_footprint=item['footprint'])
+                              source_footprint=footprint)
                 if keep_positions:
                     element_mask(label)
                     result.append(label);continue
@@ -454,8 +460,10 @@ class PanelDocument:
                    pcb_dy=value['pcb_dy'], elements=[Element(**e) for e in value['elements']],
                    component_data=value.get('component_data'), footprint_rules=value.get('footprint_rules', {}))
 
-    def save(self, path):
-        atomic_write(path, json.dumps(self.to_dict(), ensure_ascii=False, indent=2))
+    def save(self, path,track=True):
+        from module_project import record_save,document_json
+        atomic_write(path, document_json(self.to_dict()))
+        if track:record_save(path,'panel')
 
     @classmethod
     def load(cls, path):

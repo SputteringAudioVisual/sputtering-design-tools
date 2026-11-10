@@ -1,6 +1,7 @@
 """Create a fresh fabrication package, preserving the source archive."""
 from datetime import datetime, timezone
 import hashlib
+import io
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -38,30 +39,21 @@ class FabricationExport:
         self.work = Path(self._temporary.name)/'files'
         self.work.mkdir()
         self.original_manifest = {}
+        self.parent_manifest_bytes=None;self.source_archive_sha256=None;self.sealed_source=False
         self._paths = {}
         try:
             if self.source_zip:
-                with zipfile.ZipFile(self.source_zip) as archive:
-                    members = [m for m in archive.infolist() if not m.is_dir()]
-                    seen = set()
-                    if sum(m.file_size for m in members) > 200_000_000 or any(m.file_size > 30_000_000 for m in members):
-                        raise ValueError('El paquete supera el tamaño máximo admitido.')
-                    for member in members:
-                        name = _safe_member(member.filename)
-                        if name.casefold() in seen:
-                            raise ValueError(f'Archivo duplicado en el ZIP: {name}')
-                        seen.add(name.casefold())
-                        data = archive.read(member)
-                        target = self.work/name
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_bytes(data)
-                    manifest_path = self.work/'manifest.json'
-                    if manifest_path.exists():
-                        self.original_manifest = json.loads(manifest_path.read_text(encoding='utf-8-sig'))
-                        for record in self.original_manifest.get('files', []):
-                            data = (self.work/_safe_member(record['name'])).read_bytes()
-                            if len(data) != record['bytes'] or hashlib.sha256(data).hexdigest() != record['sha256']:
-                                raise ValueError(f'El ZIP original no coincide con su manifiesto: {record["name"]}')
+                from package_integrity import read_archive
+                from release_contract import validate_release
+                raw=self.source_zip.read_bytes()
+                payload,self.original_manifest=read_archive(io.BytesIO(raw))
+                self.sealed_source=validate_release(self.original_manifest,payload)
+                self.parent_manifest_bytes=payload.get('manifest.json')
+                self.source_archive_sha256=hashlib.sha256(raw).hexdigest()
+                for name,data in payload.items():
+                    target=self.work/name
+                    target.parent.mkdir(parents=True,exist_ok=True)
+                    target.write_bytes(data)
             for file in self.work.rglob('*'):
                 if file.is_file():
                     self._paths.setdefault(file.name.casefold(), []).append(file)
@@ -71,7 +63,19 @@ class FabricationExport:
                     if not _text_equal(target.read_bytes(), data):
                         raise ValueError(f'{name}: la capa cargada no coincide con el paquete original. Carga el mismo proyecto antes de exportar.')
                 else:
+                    from package_integrity import MANUFACTURING
+                    if self.sealed_source and Path(name).suffix.lower() in MANUFACTURING:
+                        raise ValueError('Capa ajena a la liberación sellada: '+name)
                     target.write_bytes(data)
+            if not self.source_zip:
+                buffer=io.BytesIO()
+                with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as z:
+                    for file in sorted(self.work.rglob('*')):
+                        if file.is_file():
+                            info=zipfile.ZipInfo(file.relative_to(self.work).as_posix())
+                            z.writestr(info,file.read_bytes(),compress_type=zipfile.ZIP_DEFLATED)
+                self.baseline_archive=buffer.getvalue()
+                self.source_archive_sha256=hashlib.sha256(self.baseline_archive).hexdigest()
             return self
         except Exception:
             self._temporary.cleanup()
@@ -108,9 +112,20 @@ class FabricationExport:
         source.rename(target)
 
     def finish(self, changes, settings, drill_formats=None):
+        from module_project import locked
+        with locked(self.destination):return self._finish(changes,settings,drill_formats)
+
+    def _finish(self,changes,settings,drill_formats=None):
         prefix = re.sub(r'[^\w.-]+', '_', self.source_zip.stem if self.source_zip else 'gerbers')
         prefix = re.sub(r'(?:_edit_v\d+)+$', '', prefix)
+        prefix = re.sub(r'^(?:[0-9a-f]{12,16}_)+','',prefix)
+        lineage=settings.get('lineage') or {}
+        if lineage.get('module_name'):
+            suffix={'panel_artwork':'frontal_arte','pcb_silkscreen':'pcb_serigrafia'}.get(lineage['stage'],'gerbers')
+            prefix=re.sub(r'[^\w.-]+','_',lineage['module_name'])+'_'+suffix
         source_hash = hashlib.sha256(self.source_zip.read_bytes()).hexdigest() if self.source_zip else None
+        if self.source_zip and source_hash!=self.source_archive_sha256:
+            raise ValueError('El ZIP de origen cambió durante la edición; vuelve a importarlo.')
         self._preserve_metadata('manifest.json')
         self._preserve_metadata('LEEME_FABRICACION.txt')
         note = ('PAQUETE MODIFICADO EN EL EDITOR GERBER\n\n'
@@ -135,11 +150,29 @@ class FabricationExport:
             'drill_formats': drill_formats or {},
             'files': [],
         }
-        for file in sorted(self.work.rglob('*')):
-            if file.is_file():
-                data = file.read_bytes()
-                manifest['files'].append({'name': file.relative_to(self.work).as_posix(),
-                                          'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+        from release_contract import derivative,inventory,validate_release,SCHEMA
+        parent=self.original_manifest
+        root_id=parent.get('base_fabrication_release_id') if self.sealed_source else None
+        base_hash=parent.get('base_archive_sha256') or self.source_archive_sha256
+        sequence=parent.get('fabrication_edit_sequence',0)+1 if self.sealed_source else 1
+        for prior in self.destination.glob('*.zip'):
+            try:
+                with zipfile.ZipFile(prior) as z:old=json.loads(z.read('manifest.json'))
+                if old.get('schema')==SCHEMA and old.get('release_kind')=='gerber_derived' and (
+                    (root_id and old.get('base_fabrication_release_id')==root_id) or (not root_id and old.get('base_archive_sha256')==base_hash)):
+                    sequence=max(sequence,int(old['fabrication_edit_sequence'])+1)
+            except (OSError,ValueError,KeyError,zipfile.BadZipFile):continue
+        profile=dict(conversion=settings,changes=changes)
+        manifest.update(derivative(parent,self.source_archive_sha256,self.parent_manifest_bytes,sequence,profile,lineage.get('module_id')))
+        if not self.source_zip:
+            snapshot='historial_editor/base_sin_manifiesto.zip'
+            (self.work/snapshot).parent.mkdir(parents=True,exist_ok=True)
+            (self.work/snapshot).write_bytes(self.baseline_archive)
+            manifest['parent_archive_member']=snapshot
+        payload={file.relative_to(self.work).as_posix():file.read_bytes() for file in self.work.rglob('*')
+                 if file.is_file() and file.relative_to(self.work).as_posix()!='manifest.json'}
+        manifest['files']=inventory(payload,parent)
+        validate_release(manifest,payload)
         (self.work/'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
         staged_zip = Path(self._temporary.name)/'package.zip'
         with zipfile.ZipFile(staged_zip, 'w', zipfile.ZIP_DEFLATED) as archive:

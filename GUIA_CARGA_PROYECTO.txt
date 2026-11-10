@@ -1,0 +1,75 @@
+GUÍA RÁPIDA · Cargar y continuar un proyecto
+
+1. PREPARAR EL PROYECTO CAD
+Guarda el circuito en Capture y el .brd en Allegro. Ten exportados los
+Gerber y taladros de esa misma revisión: pueden estar junto al .brd o
+en una carpeta Fabricacion, como archivos sueltos o ZIP.
+Para leer el .brd se necesita Cadence Extracta instalado en el equipo.
+
+2. CARGAR POR PRIMERA VEZ
+Al sellar un ZIP F en el Asistente Allegro, responde «Sí» a abrirlo en
+«Editor PCB y serigrafías». Se abre el mismo .brd junto con ese ZIP exacto.
+El editor crea el módulo, conserva una copia de ambas fuentes y enlaza sus
+identificadores; luego ofrece abrir el frontal del módulo en otra ventana.
+Si lo haces manualmente, pulsa «Abrir proyecto…» y selecciona el .brd con el
+que generaste el ZIP. La app busca la liberación F de esa identidad/revisión.
+Si no la encuentra, selecciona el ZIP recién generado cuando lo pregunte.
+No elijas un ZIP antiguo solo porque tenga un nombre parecido.
+Puedes cargar la PCB aunque aún no tengas reglas para sus agujeros: la app
+comprueba la identidad/contorno disponibles y conserva el ZIP elegido.
+Si el paquete es histórico, revisa su alineación con taladros y serigrafía.
+
+3. DÓNDE QUEDA TODO
+Si el .brd está en allegro, se utiliza la raíz compartida con Capture:
+
+  Tu proyecto/
+    Capture/ o archivos .opj y .dsn
+    allegro/                 PCB y fabricación original
+    Sputtering/nombre-pcb/   carpeta creada por la app
+      modulo.module.json    archivo para continuar el trabajo
+      pcb/ y fabricacion/   copias fijadas de los originales
+      serigrafia_pcb/       edición e imágenes de la PCB
+      arte_frontal/         edición e imágenes del panel
+      exports/serigrafia/   ZIP de la PCB modificada
+      exports/frontal/      ZIP del panel sin imagen
+      exports/arte_frontal/ ZIP del panel con imagen
+      versiones/            guardados recuperables
+
+Si el .brd está directamente en la raíz, Sputtering se crea junto a él.
+Los módulos existentes conservan su ubicación.
+
+4. EDITAR Y GUARDAR
+Importa la imagen, elige las capas y ajusta su posición y conversión.
+Pulsa «Guardar proyecto» o Ctrl+S. En un módulo cargado desde .brd,
+la carpeta y el nombre de guardado se asignan automáticamente.
+Para importar etiquetas refdes, usa «PCB y referencias → Importar textos de
+referencia en el frontal…». Abre o reutiliza el frontal y muestra una vista
+previa. Puedes conservar textos, posiciones y tamaños anteriores.
+También aparecen componentes sin regla de agujero: parten del origen del
+footprint y quedan sin seleccionar hasta que revises su posición.
+Importar textos no añade agujeros.
+
+5. EXPORTAR Y CONTINUAR OTRO DÍA
+«Exportar Gerber» crea un ZIP numerado dentro del módulo. Al terminar,
+usa «Abrir carpeta» o «Copiar ruta» para localizarlo.
+Para continuar, pulsa «Abrir proyecto…» y elige modulo.module.json.
+«Módulo → Versiones y recuperación…» permite recuperar un guardado.
+«Módulo → Liberaciones y comparación…» permite consultar y comparar ZIP.
+
+Los números tienen funciones distintas:
+  Guardado 0001: una edición recuperable dentro de la app.
+  PCB 1.0: revisión de la placa declarada en Allegro.
+  F001: exportación original de Allegro; E001: exportación modificada aquí.
+Los ZIP antiguos siguen abriendo aunque no tengan esa identificación.
+La app conserva los originales; no deduce una revisión PCB por su nombre.
+Si la placa cambia en Allegro, guarda y genera una fabricación nueva antes
+de actualizarla en el editor. El editor no comprueba cambios sin guardar
+que solo estén en la memoria de Allegro.
+
+PARA HACER EL FRONTAL
+«Módulo → Frontal del módulo» abre agujeros y textos. Después utiliza
+«5. Imagen del frontal…» para continuar con la imagen en el mismo módulo.
+
+Para trasladar también Capture y Allegro, mueve la carpeta completa
+«Tu proyecto», incluyendo Sputtering. La edición requiere la app y las
+tipografías utilizadas instaladas en el equipo de destino.

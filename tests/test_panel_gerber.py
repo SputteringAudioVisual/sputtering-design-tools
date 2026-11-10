@@ -88,7 +88,7 @@ class PanelManufacturingTests(unittest.TestCase):
                 for name,record in report['files'].items():self.assertEqual(hashlib.sha256(z.read(name)).hexdigest(),record['sha256'])
             self.assertFalse(list(Path(folder).glob('.panel-export-*')))
 
-    def test_ui_font_edit_and_zip_button_export_live_unsaved_document(self):
+    def test_ui_font_edit_and_zip_button_save_editable_document_before_export(self):
         from panel_editor import PanelEditor
         from tkinter import ttk
         app=PanelEditor();app.withdraw()
@@ -101,12 +101,14 @@ class PanelManufacturingTests(unittest.TestCase):
             self.assertEqual(app.document.elements[-1].font,'console')
             for _ in range(3):app.draw()
             self.assertEqual(len(app._text_images),2)
-            with tempfile.TemporaryDirectory() as folder,patch('panel_editor.filedialog.askdirectory',return_value=folder),\
+            with tempfile.TemporaryDirectory() as folder,patch('panel_editor.filedialog.asksaveasfilename',return_value=str(Path(folder)/'test.panel.json')),\
                     patch('panel_editor.messagebox.showinfo'),patch('panel_editor.messagebox.showerror',side_effect=AssertionError):
                 app.export_gerber()
-                buttons=[w for w in app._descendants(app) if isinstance(w,ttk.Button) and w.cget('text')=='Generar Gerber y ZIP…']
+                buttons=[w for w in app._descendants(app) if isinstance(w,ttk.Button) and w.cget('text')=='Guardar proyecto y generar ZIP']
                 self.assertEqual(len(buttons),1);buttons[0].invoke()
-                package=next(Path(folder).glob('*.zip'));report=json.loads(package.with_suffix('.json').read_text())
+                package=next((Path(folder)/'exports'/'frontal').glob('*.zip'));report=json.loads(package.with_suffix('.json').read_text())
+                self.assertEqual(PanelDocument.load(app.project_path).elements,app.document.elements)
+                self.assertFalse(app.dirty)
                 self.assertEqual(set(report['fonts_sha256']),{'gothic','console'})
         finally:app.destroy()
 

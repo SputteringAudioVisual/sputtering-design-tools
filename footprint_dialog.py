@@ -12,6 +12,7 @@ from tkinter import ttk, filedialog, messagebox
 from footprint_holes import read_pcb, proposals, validate_rules, library_rules, save_shared_library, library_coverage, ANCHOR_HINTS
 from panel_model import HOLE_PRESETS, HEIGHT_MM, atomic_write
 from panel_fonts import FONTS, element_mask, PIXEL_MM
+from panel_theme import apply_theme
 from PIL import Image, ImageTk
 
 ANCHOR_LABELS = {'mechanical_pair': 'Centro entre 2 anclajes mecánicos',
@@ -53,7 +54,7 @@ class FootprintDialog(tk.Toplevel):
         self.keep_size=tk.BooleanVar(value=True)
         self.preview_images=[]
         top=ttk.Frame(self,padding=10);top.pack(fill='x')
-        self.read_button=ttk.Button(top,text='Leer PCB / referencia…',command=self.choose_source)
+        self.read_button=ttk.Button(top,text='1. Elegir PCB .brd…',command=self.choose_source)
         self.read_button.pack(side='left')
         ttk.Button(top,text='Compatibilidad de la PCB…',command=self.show_coverage).pack(side='left',padx=5)
         ttk.Label(top,textvariable=self.status,wraplength=630).pack(side='left',padx=10)
@@ -80,9 +81,10 @@ class FootprintDialog(tk.Toplevel):
             for label,var in [('Actualizar ya importadas',self.update_existing),('Conservar posiciones',self.keep_positions),
                               ('Conservar textos editados',self.keep_text),('Conservar tamaños',self.keep_size)]:
                 ttk.Checkbutton(reimport,text=label,variable=var,command=self.refresh).pack(side='left',padx=5)
+        bottom=ttk.Frame(self,padding=10);bottom.pack(side='bottom',fill='x')
         frame=ttk.Frame(self,padding=(10,0));frame.pack(fill='both',expand=True)
         columns=('use','ref','footprint','kind','x','y','diameter','action')
-        self.table=ttk.Treeview(frame,columns=columns,show='headings',height=14,selectmode='browse')
+        self.table=ttk.Treeview(frame,columns=columns,show='headings',height=10,selectmode='browse')
         for key,label,width in zip(columns,['Usar','Componente','Footprint','Tipo','X panel','Y panel','Ø mm','Acción'],
                                    [45,85,180,115,80,80,65,230]):
             self.table.heading(key,text=label);self.table.column(key,width=width,minwidth=40)
@@ -113,20 +115,20 @@ class FootprintDialog(tk.Toplevel):
         ttk.Button(rule,text='Importar biblioteca de reglas…',command=self.import_rules).grid(row=3,column=0,columnspan=2,sticky='w',pady=5)
         ttk.Button(rule,text='Exportar biblioteca de reglas…',command=self.export_rules).grid(row=3,column=4,columnspan=2,sticky='e',pady=5)
         ttk.Button(rule,text='Usar esta biblioteca en todos los módulos',command=self.share_rules).grid(row=4,column=0,columnspan=6,sticky='w',pady=5)
-        if mode == 'texts':rule.pack_forget()
-        bottom=ttk.Frame(self,padding=10);bottom.pack(fill='x')
+        rule.pack_forget()
+        if mode != 'texts':
+            def toggle_rule():
+                if rule.winfo_manager():rule.pack_forget();toggle.configure(text='Biblioteca de agujeros · mostrar opciones')
+                else:rule.pack(fill='x',padx=10,pady=8,before=frame);toggle.configure(text='Biblioteca de agujeros · ocultar opciones')
+            toggle=ttk.Button(self,text='Biblioteca de agujeros · mostrar opciones',command=toggle_rule)
+            toggle.pack(fill='x',padx=12,pady=5,before=frame)
         ttk.Button(bottom,text='Marcar todos válidos',command=lambda:self.mark_all(True)).pack(side='left',padx=3)
         ttk.Button(bottom,text='Desmarcar todos',command=lambda:self.mark_all(False)).pack(side='left',padx=3)
         ttk.Button(bottom,text='Cancelar',command=self.close).pack(side='right',padx=3)
-        self.apply_button=ttk.Button(bottom,text='Aplicar seleccionados',command=self.apply,state='disabled')
+        self.apply_button=ttk.Button(bottom,text=('Aplicar etiquetas seleccionadas' if mode == 'texts' else 'Aplicar agujeros seleccionados'),
+                                    command=self.apply,state='disabled',style='Primary.Panel.TButton')
         self.apply_button.pack(side='right',padx=3)
-        for widget in owner._descendants(self):
-            if isinstance(widget,ttk.Widget):
-                try:widget.configure(style='Panel.'+widget.winfo_class())
-                except tk.TclError:pass
-        style=ttk.Style(self)
-        style.configure('Panel.Treeview',background='#1a1a2e',fieldbackground='#1a1a2e',foreground='#e0e0ed',rowheight=24)
-        style.map('Panel.Treeview',background=[('selected','#334c88')],foreground=[('selected','white')])
+        apply_theme(self, owner._descendants)
         self.protocol('WM_DELETE_WINDOW',self.close)
         self.refresh()
         self.grab_set()
@@ -140,10 +142,19 @@ class FootprintDialog(tk.Toplevel):
         if self.busy:return
         self.busy=True
         self.read_button.configure(state='disabled');self.apply_button.configure(state='disabled')
-        self.status.set('Leyendo la PCB sin modificarla…')
+        self.status.set('Leyendo la PCB y buscando su fabricación; se incluyen taladros y ranuras…')
         self.results=queue.Queue()
+        self.read_cancel=threading.Event()
+        original_document=copy.deepcopy(self.owner.document)
+        project_path=self.owner.project_path
+        self.read_document=original_document.to_dict()
         def work():
-            try:self.results.put((True,read_pcb(path)))
+            try:
+                if Path(path).suffix.lower()=='.brd':
+                    from pcb_project import prepare_project
+                    value=prepare_project(path,original_document,project_path,cancel=self.read_cancel)
+                else:value=read_pcb(path)
+                self.results.put((True,value))
             except Exception as error:self.results.put((False,str(error)))
         threading.Thread(target=work,daemon=True).start()
         self.poll_id=self.after(100,self.poll)
@@ -154,7 +165,14 @@ class FootprintDialog(tk.Toplevel):
         except queue.Empty:
             self.poll_id=self.after(100,self.poll);return
         self.poll_id=None;self.busy=False;self.read_button.configure(state='normal')
-        if ok:self.data=value;self.refresh()
+        if ok:
+            if 'document' in value:
+                if self.owner.document.to_dict()!=self.read_document:
+                    self.status.set('El frontal cambió durante la lectura. Vuelve a elegir la PCB para conservar tu edición.');return
+                self.owner.adopt_pcb_project(value)
+                self.data=value['data']
+            else:self.data=value
+            self.refresh()
         else:
             self.status.set('No se ha cambiado el proyecto.')
             messagebox.showerror('Referencia de PCB',value,parent=self)
@@ -174,12 +192,26 @@ class FootprintDialog(tk.Toplevel):
             candidates,skipped=proposals(self.data,self.rules,self.owner.document.reference_bounds(),drills)
             labels = {}
             if self.mode == 'texts':
-                labels = {e.source_ref:e for e in self.owner.document.refdes_labels(self.data,self.rules,**self.text_options())[0]}
+                labels = {e.source_ref:e for e in self.owner.document.refdes_labels(
+                    self.data,self.rules,**self.text_options(),_registered=(candidates,skipped))[0]}
         except ValueError as error:
             self.status.set(str(error));self.apply_button.configure(state='disabled');return
         d=self.owner.document
         owned={e.source_ref for e in d.elements if e.kind=='hole' and e.source_ref}
-        for item in candidates:
+        if self.mode == 'texts':
+            by_ref={item['refdes']:item for item in candidates}
+            rows=[]
+            for component in self.data.get('components',[]):
+                if component.get('side') not in {'TOP','BOTTOM'}:continue
+                item=by_ref.get(component['refdes'])
+                if item is None:
+                    item=dict(refdes=component['refdes'],footprint=component['footprint'],
+                        x_mm=component['x_mm'],y_mm=component['y_mm'],diameter_mm=0,
+                        hole_type='custom',review_required=True)
+                rows.append(item)
+        else:
+            rows=candidates
+        for item in rows:
             x,y=item['x_mm']+d.pcb_dx,item['y_mm']+d.pcb_dy;r=item['diameter_mm']/2
             outside=not(r<=x<=d.width-r and r<=y<=HEIGHT_MM-r)
             if self.mode == 'texts':
@@ -199,6 +231,14 @@ class FootprintDialog(tk.Toplevel):
                 HOLE_PRESETS[item['hole_type']][2],f'{x:.3f}',f'{y:.3f}',f"{item['diameter_mm']:g}",action))
         counts=Counter(c['hole_type'] for c in candidates)
         unknown=sum(r['count'] for r in library_coverage(self.data,self.rules) if not r['ready'])
+        if self.mode == 'texts':
+            unanchored=sum(1 for item in rows if item.get('review_required'))
+            self.status.set(f"{self.data.get('board_name','PCB')}: {len(rows)} referencias; "
+                f"{unanchored} sin anclaje mecánico, requieren revisión. "
+                f"{len(self.checked)} seleccionadas; {len(skipped)} omitidas por cara/anclaje. "
+                + (' '.join(ref+': '+reason for ref,reason in skipped[:2])))
+            self.update_checks()
+            return
         self.status.set(f"{self.data.get('board_name','PCB')}: {len(candidates)} centros · "
             +', '.join(f'{count} {HOLE_PRESETS[kind][2]}' for kind,count in counts.items())+'. '
             +f"{len(self.data.get('unplaced',[]))} componentes sin colocar; {len(skipped)} omitidos por anclaje/cara. "
@@ -228,7 +268,7 @@ class FootprintDialog(tk.Toplevel):
         ref=item['refdes']
         action=('Fuera del frontal' if outside else 'Actualizar estilo' if updating and self.keep_positions.get() and self.keep_text.get()
                 else 'Actualizar etiqueta' if updating else 'Texto existente: conservar' if exists
-                else 'Revisar agujero/diámetro' if not reviewed else 'Añadir texto')
+                else 'Revisar posición' if not reviewed else 'Añadir texto')
         self.items[ref]=(dict(item,label=label,review_required=not reviewed),valid,action)
         if valid and reviewed:self.checked.add(ref)
         self.table.insert('','end',iid=ref,values=('✓' if valid else '',ref,item['footprint'],'Etiqueta refdes',
@@ -290,6 +330,7 @@ class FootprintDialog(tk.Toplevel):
             table.insert('','end',values=(row['footprint'],row['count'],row['ready'],state))
         ttk.Label(win,text='Sin regla no se inventa ningún agujero. Configura los controles que lo necesiten; resistencias e integrados no suelen necesitar corte.',wraplength=820).pack(padx=10,pady=5)
         ttk.Button(win,text='Cerrar',command=win.destroy).pack(pady=5)
+        apply_theme(win, self.owner._descendants)
 
     def select_row(self,event=None):
         selection=self.table.selection()
@@ -346,6 +387,7 @@ class FootprintDialog(tk.Toplevel):
 
     def close(self):
         self.closed=True
+        if hasattr(self,'read_cancel'):self.read_cancel.set()
         if self.poll_id:self.after_cancel(self.poll_id)
         self.owner.canvas.delete('footprint_preview')
         self.grab_release();self.destroy()

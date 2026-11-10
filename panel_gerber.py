@@ -32,10 +32,12 @@ def package_files(document, copper=True):
             raise ValueError(f'Agujero {i+1}: diámetro menor de 0,5 mm o demasiado cerca del borde.')
         if any(math.hypot(h.x-o.x,h.y-o.y)<(h.size+o.size)/2+.2 for o in holes[:i]):
             raise ValueError(f'Agujero {i+1}: se solapa o deja menos de 0,2 mm de material.')
-    rects=[];fonts={};text_styles=[]
+    rects=[];fonts={};text_styles=[];text_comments=[]
     for e in document.elements:
         if e.kind!='text':continue
         mask=element_mask(e)
+        from silkscreen_windows import element_box,box_comment
+        text_comments.append(box_comment(element_box(e)))
         if any(text_mask(line,e.size,e.font,0,e.width_scale,e.tracking,e.line_spacing,e.align,e.ink_gain).height*PIXEL_MM<1
                for line in e.text.split('\n') if line.strip()):
             raise ValueError(f'{e.text}: la altura de los caracteres es menor de 1 mm. Aumenta el tamaño.')
@@ -53,7 +55,7 @@ def package_files(document, copper=True):
             rects.append(box)
     outline=header('Profile,NP')+coord(0,0)+'D02*\n'
     outline+=''.join(coord(x,y)+'D01*\n' for x,y in [(document.width,0),(document.width,HEIGHT),(0,HEIGHT),(0,0)])+'M02*\n'
-    silk=header('Legend,Top')+''.join(rectangle(r) for r in rects)+'M02*\n'
+    silk=header('Legend,Top')+''.join(text_comments)+''.join(rectangle(r) for r in rects)+'M02*\n'
     copper_body=''
     if copper:
         copper_body=rectangle((.3,.3,document.width-.3,HEIGHT-.3))
@@ -84,15 +86,19 @@ def package_files(document, copper=True):
         copper_fill=copper)
 
 
-def export_panel(document, destination, name='panel', copper=True):
+def export_panel(document, destination, name='panel', copper=True,project=None):
     files,proof,report=package_files(document,copper)
     destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)
     stem=re.sub(r'[^A-Za-z0-9_-]+','_',name).strip('_') or 'panel'
+    from layer_identity import named_panel_files
+    files=named_panel_files(files,stem)
     for version in range(1,10000):
         target=destination/f'{stem}_gerbers_v{version:03}.zip'
         if not any(target.with_suffix(ext).exists() for ext in ('.zip','.svg','.json')):break
     else:raise ValueError('No hay número de exportación libre.')
     report['files']={k:dict(bytes=len(v),sha256=hashlib.sha256(v).hexdigest()) for k,v in files.items()}
+    from module_project import lineage,record_output
+    if project:report['lineage']=lineage(project)
     with tempfile.TemporaryDirectory(prefix='.panel-export-',dir=destination) as folder:
         staged=Path(folder)/target.name
         with zipfile.ZipFile(staged,'w',zipfile.ZIP_DEFLATED) as z:
@@ -104,4 +110,7 @@ def export_panel(document, destination, name='panel', copper=True):
         atomic_write(target.with_suffix('.json'),json.dumps(report,indent=2))
         # Exclusive copy never overwrites a previous order package.
         with target.open('xb') as out:out.write(staged.read_bytes())
+    if project:
+        record_output(project,target,details=dict(proof=target.with_suffix('.svg').name,report=target.with_suffix('.json').name))
+        for ext in ('.svg','.json'):record_output(project,target.with_suffix(ext),details=dict(package=target.name))
     return target

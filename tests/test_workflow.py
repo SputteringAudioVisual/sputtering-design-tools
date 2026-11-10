@@ -16,6 +16,7 @@ from gerber_silkscreen_editor import (GerberEditor, GerberLayer, ImageToGerber, 
                                      _image_ink_mask, _prepare_logo_image)
 from panel_model import Reference, PanelDocument, load_references
 from test_panel import BOARD
+from image_tuning import ink_preview
 
 DRILLS = 'M48\nMETRIC,TZ\nT01C0.7\n%\nG90\nT01\nX1500000Y2000000\nX2500000\nM30\n'
 ALGOS = ('threshold', 'floyd', 'atkinson', 'bayer4', 'bayer8', 'stucki', 'jarvis')
@@ -116,7 +117,8 @@ class OriginalWorkflowTests(unittest.TestCase):
         for label in ('📂 Añadir capa', '🖼 Importar Imagen', '💾 Exportar Gerber', '✨ Generar capa nueva',
                       '🔬 Editor de conversión'):
             self.assertIn(label, labels)
-        self.assertEqual(self.app.canvas.cget('bg'), '#0d1a0d')
+        self.assertEqual(self.app.canvas.cget('bg'), '#000000')
+        self.assertEqual(self.app.gerber_layers[1]['color'], '#ffffff')
         self.assertEqual(self.app.entry_x.cget('bg'), '#1a1a2e')
 
     @staticmethod
@@ -202,6 +204,9 @@ class OriginalWorkflowTests(unittest.TestCase):
 
         def assert_settled():
             self.pump_events(1.0)
+            deadline = time.monotonic() + 8
+            while self.app._conv_poll_id is not None and time.monotonic() < deadline:
+                self.pump_events(.1)
             previous = snapshot()
             self.assertEqual(len(previous), 2)
             self.pump_events(.6)
@@ -215,7 +220,7 @@ class OriginalWorkflowTests(unittest.TestCase):
                          and float(w.cget('to')) == 255)
         threshold.set(185)
         changed = assert_settled()
-        self.assertNotEqual(initial[0][0], changed[0][0])
+        self.assertNotEqual(initial[1][0], changed[1][0])
         win.geometry('1000x700')
         resized = assert_settled()
         self.assertNotEqual(changed[0][1], resized[0][1])
@@ -564,10 +569,10 @@ class OriginalWorkflowTests(unittest.TestCase):
                     np.testing.assert_array_equal(exported_mask, np.array(raster['mask'])>0)
                     self.app._redraw()
                     main = ImageTk.getimage(self.app._overlay_tk_cache).convert('RGBA')
-                    intended = raster['mask'].resize(main.size, Image.NEAREST)
-                    np.testing.assert_array_equal(np.array(main)[:, :, 3]>0, np.array(intended)>0)
+                    intended = ink_preview(raster['mask'],main.size)
+                    np.testing.assert_array_equal(np.array(main)[:, :, 3], np.array(intended))
                     ink = np.array(main)[np.array(intended)>0]
-                    self.assertTrue(np.all(ink == [255, 255, 255, 255]))
+                    self.assertTrue(np.all(ink[:,:3] == [255, 255, 255]))
 
     def test_explicit_positive_and_negative_options_apply_to_pcb_and_gerber(self):
         from PIL import Image, ImageTk

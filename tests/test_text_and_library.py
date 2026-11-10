@@ -211,7 +211,9 @@ class LabelReimportTests(unittest.TestCase):
             self.assertTrue(dialog.update_existing.get());self.assertEqual(dialog.checked,{'P1','J1','S1'})
             dialog.text_font.set(FONTS['stencil'][0]);dialog.refresh()
             self.assertEqual({item[0]['label'].font for item in dialog.items.values()},{'stencil'})
-            self.assertEqual({item[2] for item in dialog.items.values()},{'Actualizar estilo'})
+            self.assertEqual({ref:item[2] for ref,item in dialog.items.items()},
+                             {'P1':'Actualizar estilo','J1':'Actualizar estilo',
+                              'S1':'Actualizar estilo','R1':'Revisar posición'})
             dialog.update_existing.set(False);dialog.refresh();self.assertFalse(dialog.checked)
             dialog.update_existing.set(True);dialog.refresh();dialog.apply()
             self.assertEqual(len(app.document.elements),3)

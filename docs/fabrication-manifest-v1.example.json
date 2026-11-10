@@ -1,0 +1,108 @@
+{
+  "schema": "sputtering.fabrication.v1",
+  "project_id": "00000000-0000-4000-8000-000000000001",
+  "project_name": "EJEMPLO SINTETICO; NO FABRICAR",
+  "pcb_revision": "1.0",
+  "fabrication_release_id": "00000000-0000-4000-8000-000000000002",
+  "release_kind": "allegro_original",
+  "release_label": "F001",
+  "fabrication_sequence": 1,
+  "base_fabrication_release_id": "00000000-0000-4000-8000-000000000002",
+  "parent_release_id": null,
+  "parent_archive_sha256": null,
+  "parent_manifest_sha256": null,
+  "source_board_sha256": "104a824cc332c830cb6b1413689e2541e3cc9d500dfa77f3d8acce3b46fcd42f",
+  "source_board": {
+    "project_relative_path": "Sputtering/pcb/00000000-0000-4000-8000-000000000001/releases/00000000-0000-4000-8000-000000000002/source.brd",
+    "sha256": "104a824cc332c830cb6b1413689e2541e3cc9d500dfa77f3d8acce3b46fcd42f",
+    "bytes": 44
+  },
+  "created_utc": "2000-01-01T00:00:00Z",
+  "tools": [
+    {
+      "name": "synthetic_contract_fixture",
+      "version": "1.0"
+    }
+  ],
+  "profile": {},
+  "release_status": "pending_cam_review",
+  "provenance_status": "verified",
+  "board": "EJEMPLO_NO_FABRICAR",
+  "fabrication_version": 1,
+  "status": "EXPORTADO_SIN_AVISOS",
+  "example_only": true,
+  "files": [
+    {
+      "path": "COPPER_TOP.art",
+      "name": "COPPER_TOP.art",
+      "bytes": 67,
+      "sha256": "affc987a96427ba90c838b723d13ee7fd2954e30646eb40a3dfff048fb43ee0a",
+      "role": "copper.top",
+      "layer": "TOP"
+    },
+    {
+      "path": "COPPER_BOTTOM.art",
+      "name": "COPPER_BOTTOM.art",
+      "bytes": 67,
+      "sha256": "affc987a96427ba90c838b723d13ee7fd2954e30646eb40a3dfff048fb43ee0a",
+      "role": "copper.bottom",
+      "layer": "BOTTOM"
+    },
+    {
+      "path": "MASK_TOP.art",
+      "name": "MASK_TOP.art",
+      "bytes": 67,
+      "sha256": "affc987a96427ba90c838b723d13ee7fd2954e30646eb40a3dfff048fb43ee0a",
+      "role": "soldermask.top",
+      "layer": "TOP"
+    },
+    {
+      "path": "MASK_BOTTOM.art",
+      "name": "MASK_BOTTOM.art",
+      "bytes": 67,
+      "sha256": "affc987a96427ba90c838b723d13ee7fd2954e30646eb40a3dfff048fb43ee0a",
+      "role": "soldermask.bottom",
+      "layer": "BOTTOM"
+    },
+    {
+      "path": "SILK_TOP.art",
+      "name": "SILK_TOP.art",
+      "bytes": 67,
+      "sha256": "affc987a96427ba90c838b723d13ee7fd2954e30646eb40a3dfff048fb43ee0a",
+      "role": "silkscreen.top",
+      "layer": "TOP"
+    },
+    {
+      "path": "SILK_BOTTOM.art",
+      "name": "SILK_BOTTOM.art",
+      "bytes": 67,
+      "sha256": "affc987a96427ba90c838b723d13ee7fd2954e30646eb40a3dfff048fb43ee0a",
+      "role": "silkscreen.bottom",
+      "layer": "BOTTOM"
+    },
+    {
+      "path": "OUTLINE.art",
+      "name": "OUTLINE.art",
+      "bytes": 67,
+      "sha256": "affc987a96427ba90c838b723d13ee7fd2954e30646eb40a3dfff048fb43ee0a",
+      "role": "profile",
+      "layer": null
+    },
+    {
+      "path": "PCB_DRILL.drl",
+      "name": "PCB_DRILL.drl",
+      "bytes": 37,
+      "sha256": "9c4230d68ea20b41dabf78dc9d2b8e887708266b468f61fe985710604a0b8a26",
+      "role": "drill.plated_and_nonplated",
+      "layer": null
+    },
+    {
+      "path": "LEEME_FABRICACION.txt",
+      "name": "LEEME_FABRICACION.txt",
+      "bytes": 51,
+      "sha256": "c244617995c191dfcf3172a598345d27098153e59b4a146cba4bbf2e9f68ea00",
+      "role": "report",
+      "layer": null
+    }
+  ]
+}

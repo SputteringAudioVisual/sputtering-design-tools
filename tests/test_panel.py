@@ -154,12 +154,17 @@ class GeometryTests(unittest.TestCase):
             path = Path(tmp)/'board.zip'
             with zipfile.ZipFile(path, 'w') as archive:
                 archive.writestr('nested/outline.gbr', BOARD)
-                archive.writestr('../other.txt', 'not a gerber')
+                archive.writestr('other.txt', 'not a gerber')
                 archive.writestr('bad.gto', 'no geometry')
             refs, errors = load_references([path])
             self.assertEqual(len(refs), 1)
             self.assertEqual(len(errors), 1)
             self.assertEqual(list(Path(tmp).iterdir()), [path])
+            unsafe=Path(tmp)/'unsafe.zip'
+            with zipfile.ZipFile(unsafe,'w') as archive:
+                archive.writestr('outline.gbr',BOARD);archive.writestr('../other.txt','unsafe metadata')
+            refs,errors=load_references([unsafe])
+            self.assertFalse(refs);self.assertEqual(len(errors),1)
 
 
 class WorkspaceTests(unittest.TestCase):

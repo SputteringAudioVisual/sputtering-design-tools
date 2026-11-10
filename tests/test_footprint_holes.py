@@ -220,13 +220,16 @@ class RefdesLabelTests(unittest.TestCase):
         d.center_pcb()
         return d
 
-    def test_only_components_with_registered_holes_get_labels(self):
+    def test_all_placed_components_get_labels_and_unregistered_anchor_is_origin(self):
         from panel_fonts import element_mask,PIXEL_MM
         d=self.document();labels,_=d.refdes_labels(sample(),DEFAULT_RULES)
-        self.assertEqual([e.text for e in labels],['P1','J1','S1'])
+        self.assertEqual([e.text for e in labels],['P1','J1','S1','R1'])
         pot=labels[0]
         self.assertEqual(pot.x,2.5+d.pcb_dx)
         self.assertAlmostEqual(pot.y,7+d.pcb_dy+8.128/2+1+element_mask(pot).height*PIXEL_MM/2)
+        resistor=labels[-1]
+        self.assertAlmostEqual(resistor.x,5+d.pcb_dx)
+        self.assertAlmostEqual(resistor.y,5+d.pcb_dy+1+element_mask(resistor).height*PIXEL_MM/2)
         below,_=d.refdes_labels(sample(),DEFAULT_RULES,size=3,gap=2,position='below')
         self.assertAlmostEqual(below[0].y,7+d.pcb_dy-8.128/2-2-element_mask(below[0]).height*PIXEL_MM/2)
 
@@ -236,6 +239,15 @@ class RefdesLabelTests(unittest.TestCase):
         h=d.elements[0];h.x+=2;h.y+=3;h.size=8
         labels,_=d.refdes_labels(sample(),DEFAULT_RULES)
         self.assertEqual((labels[0].x,labels[0].y),(h.x,h.y+4+1+element_mask(labels[0]).height*PIXEL_MM/2))
+
+    def test_label_keeps_existing_hole_clearance_without_current_footprint_rule(self):
+        from panel_fonts import element_mask,PIXEL_MM
+        d=self.document();d.apply_footprint_holes(sample(),DEFAULT_RULES,['P1'])
+        hole=d.elements[0];hole.x+=2;hole.y+=3;hole.size=9
+        labels,_=d.refdes_labels(sample(),{},position='right',gap=2)
+        label=next(e for e in labels if e.source_ref=='P1')
+        self.assertEqual(label.y,hole.y)
+        self.assertAlmostEqual(label.x,hole.x+hole.size/2+2+element_mask(label).width*PIXEL_MM/2)
 
     def test_repeat_preserves_edited_labels_and_hole_regeneration_keeps_text(self):
         d=self.document();d.apply_refdes_labels(sample(),DEFAULT_RULES,['P1','J1'])
@@ -264,8 +276,9 @@ class RefdesLabelTests(unittest.TestCase):
         for options in [dict(size=0),dict(position='diagonal'),dict(gap=-1),dict(gap=50)]:
             with self.assertRaises(ValueError):d.apply_refdes_labels(sample(),DEFAULT_RULES,['S1'],**options)
             self.assertEqual(d.to_dict(),before)
-        with self.assertRaises(ValueError):d.apply_refdes_labels(sample(),DEFAULT_RULES,['R1'])
-        self.assertEqual(d.to_dict(),before)
+        d.apply_refdes_labels(sample(),DEFAULT_RULES,['R1'])
+        self.assertEqual([e.source_ref for e in d.elements if e.kind=='text'],['R1'])
+        with self.assertRaises(ValueError):d.apply_refdes_labels(sample(),DEFAULT_RULES,['Z99'])
 
     def test_text_preview_cancel_apply_undo_and_clear(self):
         from panel_editor import PanelEditor

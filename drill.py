@@ -83,3 +83,69 @@ class DrillLayer:
                        min(h['y']-h['sy']/2 for h in self.drawables),
                        max(h['x']+h['sx']/2 for h in self.drawables),
                        max(h['y']+h['sy']/2 for h in self.drawables))
+
+
+class RouteLayer:
+    """Straight Excellon milling references; slot centres are registration points."""
+    def __init__(self, content, coord_format=None):
+        self.raw_lines = content.splitlines(keepends=True)
+        self.filepath = None
+        self.used_apertures = set()
+        self.drawables = []
+        self.unit = 'IN' if re.search(r'(?m)^INCH', content) else 'MM'
+        factor = 25.4 if self.unit == 'IN' else 1
+        declared = re.search(r'FILE_FORMAT\s*[=:]\s*(\d+)[:.]([0-9]+)', content)
+        mask = re.search(r'(?:METRIC|INCH)(?:,[A-Z]+)?,(0+)\.(0+)', content)
+        if declared: coord_format = (int(declared[1]), int(declared[2]))
+        elif mask: coord_format = (len(mask[1]), len(mask[2]))
+        coords = re.findall(r'[XY]([+-]?[\d.]+)', '\n'.join(s.split(';')[0] for s in content.splitlines()))
+        if coord_format is None and any('.' not in value for value in coords):
+            raise ValueError('Ranuras sin formato: carga también nc_param.txt. No se adivina la escala.')
+        self.format_x = self.format_y = tuple(coord_format or (3, 3))
+        leading = bool(re.search(r'(?:METRIC|INCH),LZ', content))
+        def decode(value):
+            if '.' in value: return float(value)*factor
+            sign = -1 if value.startswith('-') else 1
+            digits = value.lstrip('+-')
+            if leading: digits = digits.ljust(sum(self.format_x), '0')
+            return sign*int(digits)/10**self.format_x[1]*factor
+        tools, active, x, y, cutting, positioned = {}, None, 0., 0., False, False
+        for source in content.splitlines():
+            line = source.split(';')[0].strip()
+            if not line: continue
+            tool = re.fullmatch(r'T(\d+)C([\d.]+)', line)
+            if tool:
+                diameter = float(tool[2])*factor
+                if not math.isfinite(diameter) or diameter <= 0: raise ValueError('Herramienta de ranura inválida.')
+                tools[int(tool[1])] = diameter
+                continue
+            tool = re.fullmatch(r'T(\d+)', line)
+            if tool:
+                if cutting: raise ValueError('Cambio de herramienta durante el fresado.')
+                active = int(tool[1]); continue
+            if line == 'M15':
+                if active not in tools or not positioned: raise ValueError('Ranura sin herramienta o punto inicial.')
+                cutting = True; continue
+            if line == 'M16': cutting = False; continue
+            move = re.fullmatch(r'G0([01])(?:X([+-]?[\d.]+))?(?:Y([+-]?[\d.]+))?', line)
+            if move and (move[2] is not None or move[3] is not None):
+                nx = decode(move[2]) if move[2] is not None else x
+                ny = decode(move[3]) if move[3] is not None else y
+                if move[1] == '0':
+                    if cutting: raise ValueError('Movimiento rápido con la herramienta bajada.')
+                else:
+                    if not cutting or active not in tools: raise ValueError('Fresado sin herramienta activa.')
+                    if abs(nx-x)>1e-7 and abs(ny-y)>1e-7:
+                        raise ValueError('Ranuras diagonales todavía no admitidas; no se aproximan.')
+                    diameter = tools[active]
+                    self.drawables.append(dict(type='flash',shape='O',x=(x+nx)/2,y=(y+ny)/2,
+                        sx=abs(nx-x)+diameter,sy=abs(ny-y)+diameter,polarity='dark',tool=active))
+                x,y,positioned = nx,ny,True
+                continue
+            if line in ('M48','%','G90','G40','M30') or re.fullmatch(r'F[\d.]+',line) or re.fullmatch(r'(METRIC|INCH)(,[A-Z]+)?(,0+\.0+)?',line):
+                continue
+            raise ValueError(f'Instrucción de ranuras no admitida: {line}')
+        if cutting or not self.drawables: raise ValueError('Archivo de ranuras incompleto o vacío.')
+        self.tools = tools
+        self.bounds = (min(p['x']-p['sx']/2 for p in self.drawables), min(p['y']-p['sy']/2 for p in self.drawables),
+                       max(p['x']+p['sx']/2 for p in self.drawables), max(p['y']+p['sy']/2 for p in self.drawables))
