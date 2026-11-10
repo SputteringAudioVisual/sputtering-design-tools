@@ -1,5 +1,5 @@
 """Millimetre geometry and portable documents for the Eurorack front-panel editor."""
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 import json
 import math
 from pathlib import Path
@@ -9,14 +9,24 @@ from xml.sax.saxutils import escape
 import zipfile
 
 from gerber_silkscreen_editor import GerberLayer
-from drill import DrillLayer, parameter_format
+from drill import DrillLayer, RouteLayer, parameter_format
+from panel_fonts import FONTS, FONT_WEIGHTS
 
 HEIGHT_MM = 128.5
 HP_MM = 5.08
 SCHEMA = "sputtering.front-panel.v1"
+# Starting templates, not a claim that every part in a family has this bushing.
+HOLE_PRESETS = {
+    'potentiometer': ('Potenciómetro · Ø8,128 mm', 8.128, 'Potenciómetro'),
+    'jack': ('Jack 3,5 mm · Ø6,1 mm', 6.1, 'Jack'),
+    'spdt': ('SPDT mini · Ø6,5 mm', 6.5, 'SPDT'),
+    'dpdt': ('DPDT · Ø6,5 mm', 6.5, 'DPDT'),
+    'rack': ('Tornillo de rack · Ø3,2 mm', 3.2, 'Tornillo rack'),
+    'custom': ('Personalizado', None, 'Agujero'),
+}
 GERBER_EXTENSIONS = {'.gbr', '.ger', '.art', '.gto', '.gbo', '.gko', '.gm1',
                      '.gtl', '.gbl', '.gts', '.gbs', '.pho'}
-DRILL_EXTENSIONS = {'.drl', '.xln', '.exc'}
+DRILL_EXTENSIONS = {'.drl', '.xln', '.exc', '.rou'}
 
 
 def number(value, minimum=None, maximum=None):
@@ -32,14 +42,15 @@ def number(value, minimum=None, maximum=None):
 
 def atomic_write(path, text):
     path = Path(path)
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', newline='\n',
-                                     dir=path.parent, delete=False) as stream:
-        temporary = Path(stream.name)
-        stream.write(text)
+    temporary = None
     try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', newline='\n',
+                                         dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(text)
         temporary.replace(path)
     finally:
-        temporary.unlink(missing_ok=True)
+        if temporary is not None:temporary.unlink(missing_ok=True)
 
 
 def geometry_bounds(layer, outline=False):
@@ -72,7 +83,8 @@ class Reference:
 
     def __post_init__(self):
         if Path(self.name).suffix.lower() in DRILL_EXTENSIONS:
-            self.layer = DrillLayer(self.content, self.coord_format)
+            reader = RouteLayer if Path(self.name).suffix.lower() == '.rou' else DrillLayer
+            self.layer = reader(self.content, self.coord_format)
             self.coord_format = self.layer.format_x
             return
         # Do not silently display unsupported constructs at misleading dimensions.
@@ -117,7 +129,18 @@ class Reference:
         self.layer = GerberLayer()
         self.layer.raw_lines = self.content.splitlines(keepends=True)
         self.layer._parse()
-        self.layer.bounds = geometry_bounds(self.layer)
+        if self.layer.drawables:
+            self.layer.bounds = geometry_bounds(self.layer)
+        else:
+            # Una serigrafía exportada vacía sigue siendo un destino Gerber válido.
+            # Aceptar solo un cuerpo de configuración/fin, nunca geometría ignorada.
+            body = re.sub(r'G0?4[^*]*\*', '', self.content)
+            body = re.sub(r'%[^%]*%', '', body)
+            commands = [command.strip() for command in body.split('*') if command.strip()]
+            if (not commands or commands[-1] not in {'M02', 'M2'} or
+                    any(not re.fullmatch(r'M0?2|G0?1|G75|D\d+', command) for command in commands)):
+                raise ValueError(f'{self.name}: la capa vacía contiene comandos no reconocidos o está incompleta.')
+            self.layer.bounds = None
 
     def serialise(self):
         return {'name': self.name, 'content': self.content, 'visible': self.visible,
@@ -133,22 +156,21 @@ def load_references(paths):
             continue
         try:
             if path.suffix.lower() == '.zip':
-                with zipfile.ZipFile(path) as archive:
-                    for member in archive.infolist():
-                        if member.is_dir() or Path(member.filename).suffix.lower() not in GERBER_EXTENSIONS | DRILL_EXTENSIONS:
-                            continue
-                        if member.file_size > 30_000_000:
-                            errors.append(f"{member.filename}: supera 30 MB.")
-                            continue
-                        try:
-                            fmt = None
-                            if Path(member.filename).suffix.lower() in DRILL_EXTENSIONS:
-                                params_name = str(Path(member.filename).with_name('nc_param.txt')).replace('\\', '/')
-                                if params_name in archive.namelist():
-                                    fmt = parameter_format(archive.read(params_name).decode('utf-8-sig'))
-                            references.append(Reference(member.filename, archive.read(member).decode('utf-8-sig'), coord_format=fmt))
-                        except (ValueError, UnicodeError) as error:
-                            errors.append(str(error))
+                from package_integrity import read_archive
+                payload,manifest=read_archive(path);loaded=[];package_errors=[]
+                for name,raw in payload.items():
+                    if Path(name).suffix.lower() not in GERBER_EXTENSIONS | DRILL_EXTENSIONS:continue
+                    try:
+                        fmt=None
+                        if Path(name).suffix.lower() in DRILL_EXTENSIONS:
+                            params_name=str(Path(name).with_name('nc_param.txt')).replace('\\','/')
+                            for candidate in (params_name,'parametros/nc_param.txt'):
+                                if candidate in payload:
+                                    fmt=parameter_format(payload[candidate].decode('utf-8-sig'));break
+                        loaded.append(Reference(name,raw.decode('utf-8-sig'),coord_format=fmt))
+                    except (ValueError,UnicodeError) as error:package_errors.append(str(error))
+                if package_errors:errors.extend(package_errors)
+                if not package_errors or not manifest:references.extend(loaded)
             else:
                 fmt = None
                 if path.suffix.lower() in DRILL_EXTENSIONS:
@@ -168,6 +190,18 @@ class Element:
     y: float
     size: float
     text: str = ''
+    hole_type: str = ''
+    source_ref: str = ''
+    source_footprint: str = ''
+    board_x: float | None = None
+    board_y: float | None = None
+    font: str = 'sans'
+    angle: float = 0
+    width_scale: float = 1
+    tracking: float = 0
+    line_spacing: float = 1.2
+    align: str = 'center'
+    ink_gain: float = .075
 
     def __post_init__(self):
         if self.kind not in {'hole', 'text'}:
@@ -175,8 +209,29 @@ class Element:
         self.x, self.y = number(self.x), number(self.y)
         self.size = number(self.size, 0.1, 200)
         self.text = str(self.text)
+        if self.font not in FONTS:raise ValueError('Tipografía no reconocida.')
+        self.angle=number(self.angle)%360
+        self.width_scale=number(self.width_scale,.25,4)
+        self.tracking=number(self.tracking,0,3)
+        self.line_spacing=number(self.line_spacing,.6,3)
+        self.ink_gain=number(self.ink_gain,0,.3)
+        if self.align not in {'left','center','right'}:raise ValueError('Alineación no reconocida.')
+        if self.hole_type not in ('', *HOLE_PRESETS):
+            raise ValueError('Tipo de agujero no reconocido.')
+        if self.kind != 'hole' and self.hole_type:
+            raise ValueError('Solo los agujeros pueden tener un tipo de montaje.')
         if self.kind == 'text' and not self.text.strip():
             raise ValueError("Escribe un texto.")
+        if self.source_ref:
+            if not self.source_footprint:
+                raise ValueError('Referencia de footprint incompleta.')
+            self.board_x, self.board_y = number(self.board_x), number(self.board_y)
+
+    @property
+    def is_rack_mount(self):
+        # The original projects identified generated mounts only by this name.
+        return self.kind == 'hole' and (self.hole_type == 'rack' or
+               (not self.hole_type and self.text.strip().casefold() == 'tornillo rack'))
 
 
 @dataclass
@@ -188,6 +243,8 @@ class PanelDocument:
     pcb_dx: float = 0
     pcb_dy: float = 0
     elements: list = field(default_factory=list)
+    component_data: dict | None = None
+    footprint_rules: dict = field(default_factory=dict)
 
     def __post_init__(self):
         hp = number(self.hp, 2, 168)
@@ -198,6 +255,11 @@ class PanelDocument:
         self.pcb_dx, self.pcb_dy = number(self.pcb_dx), number(self.pcb_dy)
         if self.layers and not (isinstance(self.reference_index, int) and 0 <= self.reference_index < len(self.layers)):
             raise ValueError("La capa de referencia no existe.")
+        if self.component_data is not None or self.footprint_rules:
+            from footprint_holes import validate_data, validate_rules
+            if self.component_data is not None:
+                self.component_data = validate_data(self.component_data)
+            self.footprint_rules = validate_rules(self.footprint_rules)
 
     @property
     def width(self):
@@ -209,8 +271,9 @@ class PanelDocument:
         return geometry_bounds(self.layers[self.reference_index].layer, outline=True)
 
     def choose_outline(self):
+        from layer_identity import layer_role
         for index, ref in enumerate(self.layers):
-            if re.search(r'outline|board.?outline|profile|edge.?cuts|\.gko$|\.gm1$', ref.name, re.I):
+            if layer_role(ref.name,ref.layer)=='OUTLINE':
                 self.reference_index = index
                 return True
         self.reference_index = 0
@@ -221,15 +284,148 @@ class PanelDocument:
         if bounds:
             self.pcb_dx = self.width / 2 - (bounds[0] + bounds[2]) / 2
             self.pcb_dy = HEIGHT_MM / 2 - (bounds[1] + bounds[3]) / 2
+            self.sync_footprint_holes()
+
+    def sync_footprint_holes(self):
+        # Both generated holes and refdes labels share the PCB translation.
+        for e in self.elements:
+            if e.source_ref:
+                e.x, e.y = e.board_x+self.pcb_dx, e.board_y+self.pcb_dy
+
+    def detach_footprint_holes(self):
+        self.component_data = None
+        for e in self.elements:
+            e.source_ref, e.source_footprint = '', ''
+            e.board_x = e.board_y = None
+
+    def apply_footprint_holes(self, data, rules, selected_refs):
+        from footprint_holes import proposals, validate_data, validate_rules
+        data, rules = validate_data(data), validate_rules(rules)
+        drills = [(p['x'],p['y']) for r in self.layers if r.coord_format for p in r.layer.drawables]
+        items, skipped = proposals(data, rules, self.reference_bounds(), drills)
+        selected = set(selected_refs)
+        if not selected.issubset({item['refdes'] for item in items}):
+            raise ValueError('Hay componentes seleccionados sin una propuesta válida.')
+        updates, collisions = [], []
+        for item in items:
+            if item['refdes'] not in selected:
+                continue
+            x,y = item['x_mm']+self.pcb_dx, item['y_mm']+self.pcb_dy
+            radius=item['diameter_mm']/2
+            if not (radius <= x <= self.width-radius and radius <= y <= HEIGHT_MM-radius):
+                raise ValueError(f"{item['refdes']}: el agujero queda fuera del frontal.")
+            owned = [e for e in self.elements if e.kind == 'hole' and e.source_ref == item['refdes']]
+            if not owned and any(e.kind == 'hole' and not e.source_ref and
+                                 math.hypot(e.x-x,e.y-y) < .05 for e in self.elements):
+                collisions.append(item['refdes'])
+                continue
+            if any(e.kind == 'hole' and not e.source_ref and
+                   math.hypot(e.x-x,e.y-y) < (e.size+item['diameter_mm'])/2 for e in self.elements):
+                raise ValueError(f"{item['refdes']}: se solapa con un agujero manual. Revisa o retira ese agujero antes de generar este centro.")
+            updates.append(Element('hole',x,y,item['diameter_mm'],item['refdes'],item['hole_type'],
+                                   item['refdes'],item['footprint'],item['x_mm'],item['y_mm']))
+        replaced = {e.source_ref for e in updates}
+        self.elements = [e for e in self.elements if e.kind != 'hole' or e.source_ref not in replaced]+updates
+        self.component_data, self.footprint_rules = data, rules
+        return len(updates), collisions, skipped
+
+    def refdes_labels(self, data, rules, size=2.5, gap=1.0, position='above', font='sans',
+                     prefix='',suffix='',remove_numbers=False,dx=0,dy=0,
+                     update_existing=False,keep_positions=True,keep_text=True,keep_size=False,
+                     _registered=None):
+        """Propose a refdes for every placed component; unregistered anchors need review."""
+        from footprint_holes import proposals
+        size, gap = number(size, .5, 20), number(gap, 0, 50)
+        if position not in {'above', 'below','left','right'}:
+            raise ValueError('Elige encima, debajo, izquierda o derecha del agujero.')
+        from panel_fonts import element_mask,PIXEL_MM
+        dx,dy=number(dx,-100,100),number(dy,-100,100)
+        if not all(isinstance(v,bool) for v in (update_existing,keep_positions,keep_text,keep_size)):
+            raise ValueError('Opciones de reimportación no válidas.')
+        drills = [(p['x'],p['y']) for r in self.layers if r.coord_format for p in r.layer.drawables]
+        items, skipped = _registered if _registered is not None else proposals(data, rules, self.reference_bounds(), drills)
+        registered = {item['refdes']: item for item in items}
+        holes = {e.source_ref: e for e in self.elements if e.kind == 'hole' and e.source_ref}
+        result = []
+        for component in data.get('components', []):
+            if component.get('side') not in {'TOP', 'BOTTOM'}:
+                continue
+            ref = component['refdes']
+            item = registered.get(ref)
+            footprint = component['footprint']
+            hole = holes.get(ref)
+            x = hole.x if hole else (item['x_mm'] if item else component['x_mm'])+self.pcb_dx
+            cy = hole.y if hole else (item['y_mm'] if item else component['y_mm'])+self.pcb_dy
+            radius = hole.size/2 if hole else item['diameter_mm']/2 if item else 0
+            name=re.sub(r'\d+$','',ref) if remove_numbers else ref
+            text=str(prefix)+name+str(suffix)
+            label=Element('text', x, cy, size, text,
+                                  source_ref=ref, source_footprint=footprint,
+                                  board_x=x-self.pcb_dx, board_y=cy-self.pcb_dy, font=font)
+            owned=[e for e in self.elements if e.kind=='text' and e.source_ref==ref]
+            if update_existing and owned:
+                if len(owned)!=1:raise ValueError(f"{ref}: hay varias etiquetas vinculadas; revisa las duplicadas.")
+                old=owned[0]
+                label=replace(old,size=old.size if keep_size else size,font=font,text=old.text if keep_text else text,
+                              source_footprint=footprint)
+                if keep_positions:
+                    element_mask(label)
+                    result.append(label);continue
+                label.x,label.y=x,cy
+            mask=element_mask(label)
+            if position in {'above','below'}:
+                label.y+=(radius+gap+mask.height*PIXEL_MM/2)*(1 if position=='above' else -1)
+            else:label.x+=(radius+gap+mask.width*PIXEL_MM/2)*(1 if position=='right' else -1)
+            label.x+=dx;label.y+=dy
+            label.board_x,label.board_y=label.x-self.pcb_dx,label.y-self.pcb_dy
+            result.append(label)
+        return result, skipped
+
+    def apply_refdes_labels(self, data, rules, selected_refs, size=2.5, gap=1.0, position='above', font='sans',
+                            prefix='',suffix='',remove_numbers=False,dx=0,dy=0,
+                            update_existing=False,keep_positions=True,keep_text=True,keep_size=False):
+        from footprint_holes import validate_data, validate_rules
+        data, rules = validate_data(data), validate_rules(rules)
+        labels, skipped = self.refdes_labels(data, rules, size, gap, position, font,prefix,suffix,remove_numbers,dx,dy,
+                                             update_existing,keep_positions,keep_text,keep_size)
+        selected = set(selected_refs)
+        if not selected.issubset({e.source_ref for e in labels}):
+            raise ValueError('Hay componentes seleccionados sin etiqueta válida.')
+        updates, preserved, replacements = [], [], {}
+        for label in labels:
+            if label.source_ref not in selected:
+                continue
+            from panel_fonts import element_mask,PIXEL_MM
+            mask=element_mask(label);half_width=mask.width*PIXEL_MM/2;half_height=mask.height*PIXEL_MM/2
+            if not (half_width <= label.x <= self.width-half_width and
+                    half_height <= label.y <= HEIGHT_MM-half_height):
+                raise ValueError(f'{label.source_ref}: la etiqueta queda fuera del frontal.')
+            owned=[i for i,e in enumerate(self.elements) if e.kind=='text' and e.source_ref==label.source_ref]
+            if update_existing and owned:
+                replacements[owned[0]]=label
+            elif self.has_refdes_label(label):
+                # Keep hand-edited label text and offsets on repeated imports.
+                preserved.append(label.source_ref)
+                continue
+            else:updates.append(label)
+        self.elements=[replacements.get(i,e) for i,e in enumerate(self.elements)]+updates
+        self.component_data, self.footprint_rules = data, rules
+        return len(updates)+len(replacements), preserved, skipped
+
+    def has_refdes_label(self,label):
+        return any(e.kind=='text' and (e.source_ref==label.source_ref or
+                   (not e.source_ref and (e.text.strip().casefold()==label.source_ref.casefold() or
+                    (e.text.strip().casefold()==label.text.casefold() and math.hypot(e.x-label.x,e.y-label.y)<1))))
+                   for e in self.elements)
 
     def mounting_holes(self):
         if self.hp < 4:
             raise ValueError("Para el patrón de tornillos de esta versión elige al menos 4 HP.")
         xs = [7.5] if self.hp < 10 else [7.5, 7.5 + (self.hp - 3) * HP_MM]
-        candidates = [Element('hole', x, y, 3.2, 'Tornillo rack') for x in xs for y in (3, HEIGHT_MM-3)]
-        for item in candidates:
-            if not any(e.kind == 'hole' and math.hypot(e.x-item.x, e.y-item.y) < 0.01 for e in self.elements):
-                self.elements.append(item)
+        candidates = [Element('hole', x, y, 3.2, 'Tornillo rack', 'rack') for x in xs for y in (3, HEIGHT_MM-3)]
+        # Replace the entire generated pattern, including old-width duplicates.
+        # Unrelated holes are never removed merely because they share coordinates.
+        self.elements = [e for e in self.elements if not e.is_rack_mount]+candidates
 
     def problems(self):
         issues = []
@@ -251,7 +447,8 @@ class PanelDocument:
         return {'schema': SCHEMA, 'hp': self.hp, 'gap': self.gap,
                 'layers': [ref.serialise() for ref in self.layers],
                 'reference_index': self.reference_index, 'pcb_dx': self.pcb_dx,
-                'pcb_dy': self.pcb_dy, 'elements': [asdict(e) for e in self.elements]}
+                'pcb_dy': self.pcb_dy, 'elements': [asdict(e) for e in self.elements],
+                'component_data': self.component_data, 'footprint_rules': self.footprint_rules}
 
     @classmethod
     def from_dict(cls, value):
@@ -260,10 +457,13 @@ class PanelDocument:
         return cls(hp=value['hp'], gap=value['gap'],
                    layers=[Reference(**ref) for ref in value['layers']],
                    reference_index=value['reference_index'], pcb_dx=value['pcb_dx'],
-                   pcb_dy=value['pcb_dy'], elements=[Element(**e) for e in value['elements']])
+                   pcb_dy=value['pcb_dy'], elements=[Element(**e) for e in value['elements']],
+                   component_data=value.get('component_data'), footprint_rules=value.get('footprint_rules', {}))
 
-    def save(self, path):
-        atomic_write(path, json.dumps(self.to_dict(), ensure_ascii=False, indent=2))
+    def save(self, path,track=True):
+        from module_project import record_save,document_json
+        atomic_write(path, document_json(self.to_dict()))
+        if track:record_save(path,'panel')
 
     @classmethod
     def load(cls, path):
@@ -284,6 +484,17 @@ class PanelDocument:
                   'text-anchor="middle" dominant-baseline="central">']
         for element in self.elements:
             if element.kind == 'text':
-                lines.append(f'<text x="{element.x:g}" y="{HEIGHT_MM-element.y:g}" '
-                             f'font-size="{element.size:g}">{escape(element.text)}</text>')
+                from panel_fonts import text_mask, PIXEL_MM
+                rows=element.text.split('\n')
+                width=max(text_mask(row,element.size,element.font,tracking=element.tracking,ink_gain=0).width*PIXEL_MM
+                          for row in rows if row.strip())
+                anchor={'left':'start','center':'middle','right':'end'}[element.align]
+                x={'left':-width/2,'center':0,'right':width/2}[element.align]
+                lines.append(f'<g transform="translate({element.x:g},{HEIGHT_MM-element.y:g}) rotate({-element.angle:g}) scale({element.width_scale:g},1)">')
+                for row,text in enumerate(rows):
+                    y=(row-(len(rows)-1)/2)*element.size*element.line_spacing
+                    lines.append(f'<text x="{x:g}" y="{y:g}" text-anchor="{anchor}" '
+                                 f'font-family="{FONTS[element.font][1]}" font-weight="{FONT_WEIGHTS.get(element.font,"normal")}" '
+                                 f'letter-spacing="{element.tracking:g}" font-size="{element.size:g}">{escape(text)}</text>')
+                lines.append('</g>')
         return '\n'.join(lines + ['</g>', '</svg>', ''])

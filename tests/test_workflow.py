@@ -3,6 +3,8 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+import json
+import zipfile
 import tkinter as tk
 import unittest
 from unittest.mock import patch
@@ -10,15 +12,26 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from design_app import DesignToolsApp
 from drill import DrillLayer
-from gerber_silkscreen_editor import GerberEditor, GerberLayer, ImageToGerber, _raster_ink_mask
+from gerber_silkscreen_editor import (GerberEditor, GerberLayer, ImageToGerber, _raster_ink_mask,
+                                     _image_ink_mask, _prepare_logo_image)
 from panel_model import Reference, PanelDocument, load_references
 from test_panel import BOARD
+from image_tuning import ink_preview
 
 DRILLS = 'M48\nMETRIC,TZ\nT01C0.7\n%\nG90\nT01\nX1500000Y2000000\nX2500000\nM30\n'
 ALGOS = ('threshold', 'floyd', 'atkinson', 'bayer4', 'bayer8', 'stucki', 'jarvis')
 
 
 class ConversionTests(unittest.TestCase):
+    def test_transparency_and_rotated_background_do_not_add_ink(self):
+        from PIL import Image
+        import numpy as np
+        image = Image.new('RGBA', (30, 20), (0, 0, 0, 0))
+        for invert in (False, True):
+            for angle in (0, 45):
+                with self.subTest(invert=invert, angle=angle):
+                    _, gray, width, height = _prepare_logo_image(image, 6, 4, angle, 1.5, invert)
+                    self.assertFalse(_image_ink_mask(gray, width, height, .15, 'threshold', 128).any())
     def test_all_algorithms_keep_black_ink_and_white_empty(self):
         import numpy as np
         for algo in ALGOS:
@@ -104,7 +117,8 @@ class OriginalWorkflowTests(unittest.TestCase):
         for label in ('📂 Añadir capa', '🖼 Importar Imagen', '💾 Exportar Gerber', '✨ Generar capa nueva',
                       '🔬 Editor de conversión'):
             self.assertIn(label, labels)
-        self.assertEqual(self.app.canvas.cget('bg'), '#0d1a0d')
+        self.assertEqual(self.app.canvas.cget('bg'), '#000000')
+        self.assertEqual(self.app.gerber_layers[1]['color'], '#ffffff')
         self.assertEqual(self.app.entry_x.cget('bg'), '#1a1a2e')
 
     @staticmethod
@@ -142,6 +156,33 @@ class OriginalWorkflowTests(unittest.TestCase):
         self.app._redraw()
         self.assertFalse(self.app.canvas.find_withtag('drill_reference'))
 
+    def test_empty_silkscreen_is_an_export_target_without_changing_view(self):
+        content = 'G04 Empty bottom silk*\n%FSLAX36Y36*%\n%MOMM*%\nM02*\n'
+        ref = Reference('v003/SILK_BOTTOM.art', content)
+        self.assertIsNone(ref.layer.bounds)
+        bounds = self.app._get_all_bounds()
+        self.app.add_references([ref])
+        self.app.update_idletasks()
+        self.app._redraw()
+        self.assertEqual(self.app._get_all_bounds(), bounds)
+        self.assertEqual(len(self.app._build_export_items()), 3)
+        with tempfile.TemporaryDirectory() as folder:
+            self.import_logo(folder)
+            layer = self.app.gerber_layers[-1]['layer']
+            commands = self.app._build_logo_cmds(ImageToGerber(layer), 128)
+            target = Path(folder)/'bottom.art'
+            layer.export_with_overlay(commands, target)
+            loaded = GerberLayer().load(target)
+            self.assertTrue(loaded.drawables)
+            self.assertIn('M02*', target.read_text())
+        restored = PanelDocument.from_dict(PanelDocument(layers=[Reference('outline.gko', BOARD), ref]).to_dict())
+        self.assertEqual(restored.layers[1].content, content)
+        self.assertEqual(restored.reference_bounds(), PanelDocument(layers=[Reference('outline.gko', BOARD)]).reference_bounds())
+        with self.assertRaises(ValueError):
+            Reference('broken.art', content.replace('M02*', 'G99X100Y100*\nM02*'))
+        with self.assertRaises(ValueError):
+            Reference('incomplete.art', content.replace('M02*', ''))
+
     def pump_events(self, seconds):
         until = time.monotonic() + seconds
         while time.monotonic() < until:
@@ -163,6 +204,9 @@ class OriginalWorkflowTests(unittest.TestCase):
 
         def assert_settled():
             self.pump_events(1.0)
+            deadline = time.monotonic() + 8
+            while self.app._conv_poll_id is not None and time.monotonic() < deadline:
+                self.pump_events(.1)
             previous = snapshot()
             self.assertEqual(len(previous), 2)
             self.pump_events(.6)
@@ -176,7 +220,7 @@ class OriginalWorkflowTests(unittest.TestCase):
                          and float(w.cget('to')) == 255)
         threshold.set(185)
         changed = assert_settled()
-        self.assertNotEqual(initial[0][0], changed[0][0])
+        self.assertNotEqual(initial[1][0], changed[1][0])
         win.geometry('1000x700')
         resized = assert_settled()
         self.assertNotEqual(changed[0][1], resized[0][1])
@@ -221,7 +265,7 @@ class OriginalWorkflowTests(unittest.TestCase):
         self.assertGreater(width, 150, 'Small source must enlarge to fit the viewport')
         self.assertEqual((width, height), (labels[1].image.width(), labels[1].image.height()))
         self.assertGreaterEqual(width, labels[0].master.winfo_width()-6)
-        radios = [w for w in self.walk(win) if isinstance(w, tk.Radiobutton)]
+        radios = [w for w in self.walk(win) if isinstance(w, tk.Radiobutton) and w.cget('value') in ALGOS]
         self.assertEqual(self.app.getvar(radios[0].cget('variable')), 'atkinson')
         self.assertGreaterEqual(tkfont.Font(win, font=radios[0].cget('font')).cget('size'), 11)
         for radio in radios:
@@ -229,17 +273,18 @@ class OriginalWorkflowTests(unittest.TestCase):
                 radio.invoke()
                 self.pump_events(.6)
                 image = ImageTk.getimage(labels[1].image).convert('L')
-                self.assertEqual(image.getpixel((width//4, height//2)), 0)
-                self.assertEqual(image.getpixel((width*3//4, height//2)), 255)
-        invert = next(w for w in self.walk(win) if isinstance(w, tk.Checkbutton))
+                self.assertEqual(image.getpixel((width//4, height//2)), 255)
+                self.assertEqual(image.getpixel((width*3//4, height//2)), 0)
+        invert = next(w for w in self.walk(win) if isinstance(w, tk.Radiobutton)
+                      and str(w.cget('value')) == '1')
         invert.invoke()
         self.pump_events(.5)
         original = ImageTk.getimage(labels[0].image).convert('L')
         self.assertEqual(original.getpixel((width//4, height//2)), 0)
         self.assertEqual(original.getpixel((width*3//4, height//2)), 255)
         converted = ImageTk.getimage(labels[1].image).convert('L')
-        self.assertEqual(converted.getpixel((width//4, height//2)), 255)
-        self.assertEqual(converted.getpixel((width*3//4, height//2)), 0)
+        self.assertEqual(converted.getpixel((width//4, height//2)), 0)
+        self.assertEqual(converted.getpixel((width*3//4, height//2)), 255)
 
     def test_conversion_precise_values_steps_validation_and_apply(self):
         from PIL import Image
@@ -277,7 +322,7 @@ class OriginalWorkflowTests(unittest.TestCase):
 
         # Incomplete/non-finite input must never leak into export parameters.
         apply = next(w for w in self.walk(win) if isinstance(w, tk.Button)
-                     and w.cget('text') == '✅ Aplicar a exportación')
+                     and w.cget('text') == '✅ Aplicar a PCB y exportación')
         win.geometry('900x600')
         self.pump_events(.6)
         self.assertTrue(apply.winfo_ismapped())
@@ -362,6 +407,246 @@ class OriginalWorkflowTests(unittest.TestCase):
                 self.assertIn('M02*', content)
                 self.assertNotIn('M48', content)
                 self.assertIn('%ADD', content)
+
+    def test_export_checkboxes_contrast_toggle_and_reopened_preferences(self):
+        items = self.app._build_export_items()
+        items[0]['has_logo'] = True
+        self.app.logo_targets = [{'tag': items[0]['tag'], 'def_mode': 'under', 'def_clearance': .55}]
+        def inspect_dialog(dialog, first):
+            checks = [w for w in self.walk(dialog) if isinstance(w, tk.Checkbutton)]
+            self.assertEqual(len(checks), 2)
+            if first:
+                rgb_fg = checks[0].winfo_rgb(checks[0].cget('fg'))
+                rgb_bg = checks[0].winfo_rgb(checks[0].cget('selectcolor'))
+                self.assertGreater(sum(abs(a-b) for a,b in zip(rgb_fg, rgb_bg)), 60_000)
+                for expected in (0, 1):
+                    checks[0].invoke()
+                    self.app.update_idletasks()
+                    self.assertEqual(self.app.getvar(checks[0].cget('variable')), expected)
+                checks[1].invoke()
+                radio = next(w for w in self.walk(dialog) if isinstance(w, tk.Radiobutton)
+                             and w.cget('value') == 'clearance')
+                radio.invoke()
+                entry = next(w for w in self.walk(dialog) if isinstance(w, tk.Entry))
+                entry.delete(0, 'end'); entry.insert(0, '0,37')
+            else:
+                self.assertEqual(self.app.getvar(checks[0].cget('variable')), 1)
+                self.assertEqual(self.app.getvar(checks[1].cget('variable')), 0)
+                radio = next(w for w in self.walk(dialog) if isinstance(w, tk.Radiobutton))
+                self.assertEqual(self.app.getvar(radio.cget('variable')), 'clearance')
+            next(w for w in self.walk(dialog) if isinstance(w, tk.Button)
+                 and w.cget('text') == 'Exportar seleccionadas').invoke()
+        for first in (True, False):
+            with patch.object(self.app, 'wait_window', side_effect=lambda dialog: inspect_dialog(dialog, first)):
+                choices = self.app._choose_export_dialog(items)
+            self.assertEqual(len(choices), 1)
+            self.assertEqual(choices[0]['mode'], 'clearance')
+            self.assertEqual(choices[0]['clearance'], .37)
+
+    def test_export_zip_all_recipes_keep_drills_and_untouched_source_files(self):
+        from test_fabrication_export import create_source
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            self.import_logo(folder)
+            originals = {Path(e['name']).name: ''.join(e['layer'].raw_lines).encode()
+                         for e in self.app.gerber_layers}
+            originals.update({'test.drl': DRILLS.encode(),
+                              'parametros/nc_param.txt': b'INTEGER-PLACES 5\nDECIMAL-PLACES 5\n',
+                              'COPPER_BOTTOM.art': BOARD.encode()})
+            self.app.fabrication_source = create_source(folder, originals)
+            source_before = self.app.fabrication_source.read_bytes()
+            item = self.app._build_export_items()[1]
+            for mode in ('base', 'merge', 'under', 'clearance', 'logo_windows', 'new'):
+                with self.subTest(mode=mode), \
+                     patch.object(self.app, '_choose_export_dialog', return_value=[{'item': item, 'mode': mode, 'clearance': .2}]), \
+                     patch('gerber_silkscreen_editor.filedialog.askdirectory') as ask, \
+                     patch('gerber_silkscreen_editor.messagebox.showinfo'), \
+                     patch('gerber_silkscreen_editor.messagebox.showerror') as error:
+                    output = self.app.export_gerber()
+                    self.assertFalse(error.called, error.call_args)
+                    self.assertTrue(output.exists())
+                    ask.assert_not_called()
+                    with zipfile.ZipFile(output) as archive:
+                        self.assertEqual(archive.read('test.drl'), originals['test.drl'])
+                        self.assertEqual(archive.read('outline.gko'), originals['outline.gko'])
+                        self.assertEqual(archive.read('COPPER_BOTTOM.art'), originals['COPPER_BOTTOM.art'])
+                        if mode == 'base': self.assertEqual(archive.read('silk.gto'), originals['silk.gto'])
+                        else: self.assertNotEqual(archive.read('silk.gto'), originals['silk.gto'])
+                        self.assertIn(b'M02*', archive.read('silk.gto'))
+                        self.assertEqual(json.loads(archive.read('manifest.json'))['changes'][0]['mode'], mode)
+                    refs, errors = load_references([output])
+                    self.assertFalse(errors, errors)
+                    self.assertEqual(len([r for r in refs if r.coord_format]), 1)
+                    self.assertEqual(self.app.fabrication_source.read_bytes(), source_before)
+            self.assertEqual(len(list(folder.glob('*_edit_v*.zip'))), 6)
+
+    def test_export_loose_layers_includes_drills_and_cancel_creates_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            self.import_logo(folder)
+            target = folder/'export'
+            item = self.app._build_export_items()[1]
+            with patch.object(self.app, '_choose_export_dialog', return_value=None), \
+                 patch('gerber_silkscreen_editor.filedialog.askdirectory') as ask:
+                self.assertIsNone(self.app.export_gerber())
+                ask.assert_not_called()
+                self.assertFalse(target.exists())
+            with patch.object(self.app, '_choose_export_dialog', return_value=[{'item': item, 'mode': 'merge'}]), \
+                 patch('gerber_silkscreen_editor.filedialog.askdirectory', return_value=str(target)), \
+                 patch('gerber_silkscreen_editor.messagebox.showinfo'), \
+                 patch('gerber_silkscreen_editor.messagebox.showerror') as error:
+                output = self.app.export_gerber()
+                self.assertFalse(error.called, error.call_args)
+                self.assertTrue(output.exists())
+            refs, errors = load_references([output])
+            self.assertFalse(errors, errors)
+            self.assertEqual(len(refs), 3)
+            drills = next(r for r in refs if r.coord_format)
+            self.assertEqual(drills.coord_format, (5, 5))
+            self.assertEqual(len(drills.layer.drawables), 2)
+
+    def test_clip_tracks_manual_moves_in_main_view_and_keeps_export_placement(self):
+        from PIL import Image
+        import numpy as np
+        self.app.overlay_image = Image.new('RGB',(40,20),'black')
+        self.app.overlay_w_mm,self.app.overlay_h_mm = 4,2
+        self.app.overlay_x_mm,self.app.overlay_y_mm = 38,0
+        self.app.overlay_angle_deg = 0
+        before = self.app._make_overlay_image(400,200,128,0)
+        self.assertEqual(before.getpixel((100,100))[3],255)
+        self.assertEqual(before.getpixel((300,100))[3],0)
+        self.app.overlay_x_mm = 39
+        after = self.app._make_overlay_image(400,200,128,0)
+        self.assertEqual(after.getpixel((50,100))[3],255)
+        self.assertEqual(after.getpixel((150,100))[3],0)
+        layer = GerberLayer()
+        commands = self.app._build_logo_cmds(ImageToGerber(layer),128)
+        self.assertIn('%LPC*%',commands)
+        self.assertEqual((self.app.overlay_x_mm,self.app.overlay_y_mm),(39,0))
+        self.assertEqual((self.app.overlay_w_mm,self.app.overlay_h_mm),(4,2))
+        self.app.overlay_angle_deg=90
+        rotated=self.app._make_overlay_image(400,200,128,90)
+        self.assertTrue(np.asarray(rotated)[:,:,3].any())
+        self.app.overlay_x_mm=100
+        self.assertFalse(np.asarray(self.app._make_overlay_image(400,200,128,90))[:,:,3].any())
+
+    def test_vector_export_also_clips_without_changing_its_origin(self):
+        from PIL import Image
+        self.app.overlay_image=Image.new('RGB',(20,20),'black')
+        self.app.overlay_image_path='artwork.svg'
+        self.app.overlay_svg_path='artwork.svg'
+        self.app.overlay_x_mm,self.app.overlay_y_mm=39,0
+        self.app.overlay_w_mm,self.app.overlay_h_mm=4,2
+        self.app.overlay_angle_deg=0
+        converter=ImageToGerber(GerberLayer())
+        with patch('gerber_silkscreen_editor.SVG_AVAILABLE',True), \
+             patch.object(converter,'convert_svg_paths',return_value=['G01*','%ADD90C,0.15*%','D90*','X39000000Y0D02*','X43000000Y0D01*']) as vector:
+            commands=self.app._build_logo_cmds(converter,128)
+            self.assertEqual(vector.call_args.args,('artwork.svg',39,0,4,2))
+            self.assertIn('%LPC*%',commands)
+
+    def test_main_view_and_export_use_the_conversion_mask_for_all_settings(self):
+        from PIL import Image, ImageTk
+        import numpy as np
+        self.app.overlay_image = Image.linear_gradient('L').resize((40, 24)).convert('RGB')
+        self.app.overlay_w_mm, self.app.overlay_h_mm = 6, 3.6
+        for algorithm in ALGOS:
+            for invert in (False, True):
+                with self.subTest(algorithm=algorithm, invert=invert):
+                    self.app._conv_algo = algorithm
+                    self.app._conv_contrast = 1.6
+                    self.app._conv_pxsize = .3
+                    self.app._conv_invert = invert
+                    self.app.overlay_threshold.set(173)
+                    raster = self.app._logo_raster(limit=600)
+                    converter = ImageToGerber(GerberLayer())
+                    def capture(gray, x, y, width, height, **settings):
+                        return _image_ink_mask(gray, width, height, settings['dither_px_mm'],
+                                               settings['dither_algo'], settings['threshold'])
+                    with patch.object(converter, 'convert', side_effect=capture), \
+                         patch.object(self.app, '_clip_logo_commands', side_effect=lambda commands, layer: commands):
+                        exported_mask = self.app._export_raster(converter, 173)
+                    np.testing.assert_array_equal(exported_mask, np.array(raster['mask'])>0)
+                    self.app._redraw()
+                    main = ImageTk.getimage(self.app._overlay_tk_cache).convert('RGBA')
+                    intended = ink_preview(raster['mask'],main.size)
+                    np.testing.assert_array_equal(np.array(main)[:, :, 3], np.array(intended))
+                    ink = np.array(main)[np.array(intended)>0]
+                    self.assertTrue(np.all(ink[:,:3] == [255, 255, 255]))
+
+    def test_explicit_positive_and_negative_options_apply_to_pcb_and_gerber(self):
+        from PIL import Image, ImageTk
+        self.app.overlay_image = Image.new('RGB', (40, 20), 'white')
+        self.app.overlay_image.paste('black', (0, 0, 20, 20))
+        self.app.overlay_w_mm, self.app.overlay_h_mm = 6, 3
+        self.app._redraw()
+        self.app._open_conversion_editor()
+        win = self.app._conv_editor
+        self.pump_events(.6)
+        labels = [w for w in self.walk(win) if isinstance(w, tk.Label) and w.cget('image')]
+        positive = next(w for w in self.walk(win) if isinstance(w, tk.Radiobutton)
+                        and 'Claros' in w.cget('text'))
+        positive.invoke()
+        self.pump_events(.5)
+        preview = ImageTk.getimage(labels[1].image).convert('L')
+        self.assertEqual(preview.getpixel((preview.width//4, preview.height//2)), 0)
+        self.assertEqual(preview.getpixel((preview.width*3//4, preview.height//2)), 255)
+        self.assertTrue(any('Vista sin aplicar' in w.cget('text') for w in self.walk(win)
+                            if isinstance(w, tk.Label)))
+        with patch('gerber_silkscreen_editor.messagebox.showinfo'):
+            next(w for w in self.walk(win) if isinstance(w, tk.Button)
+                 and w.cget('text') == '✅ Aplicar a PCB y exportación').invoke()
+        self.pump_events(.6)
+        self.assertTrue(self.app._conv_invert)
+        main = ImageTk.getimage(self.app._overlay_tk_cache).convert('RGBA')
+        self.assertEqual(main.getpixel((main.width//4, main.height//2))[3], 0)
+        self.assertEqual(main.getpixel((main.width*3//4, main.height//2)), (255, 255, 255, 255))
+        self.assertTrue(any('Aplicado a PCB y exportación' in w.cget('text') for w in self.walk(win)
+                            if isinstance(w, tk.Label)))
+        # Independently inspect exported Gerber: positive prints the bright half.
+        for algorithm in ALGOS:
+            self.app._conv_algo = algorithm
+            layer = GerberLayer()
+            commands = self.app._export_raster(ImageToGerber(layer), 128)
+            layer.raw_lines = ['%FSLAX36Y36*%\n', '%MOMM*%\n', *commands, 'M02*']
+            layer._parse()
+            self.assertTrue(layer.drawables)
+            middle = self.app.overlay_x_mm+self.app.overlay_w_mm/2
+            for drawable in layer.drawables:
+                if drawable['polarity'] != 'dark' or drawable['type'] != 'line':
+                    continue
+                self.assertGreaterEqual(drawable['x1'], middle)
+                self.assertGreaterEqual(drawable['x2'], middle)
+
+    def test_export_preview_uses_applied_polarity_and_material_colours(self):
+        from PIL import Image, ImageTk
+        self.app.overlay_image = Image.new('RGB', (40, 20), 'white')
+        self.app.overlay_image.paste('black', (0, 0, 20, 20))
+        self.app.overlay_w_mm, self.app.overlay_h_mm = 6, 3
+        bounds = self.app._get_all_bounds()
+        self.app.overlay_x_mm = (bounds[0]+bounds[2])/2-3
+        self.app.overlay_y_mm = (bounds[1]+bounds[3])/2-1.5
+        self.app._conv_algo = 'floyd'
+        self.app._conv_contrast = 1.7
+        self.app._conv_invert = True
+        for tag, ext, ink, background in (
+                ('BOTTOM_SILK', '.gbo', (255, 255, 255), (0, 0, 0)),
+                ('COPPER_TOP', '.gtl', (255, 200, 40), (40, 15, 20))):
+            item = {'tag': tag, 'ext': ext, 'label': tag, 'base_entry': None}
+            before = set(self.app.winfo_children())
+            self.app._preview_layer(item, 'new')
+            window = next(w for w in self.app.winfo_children() if w not in before and isinstance(w, tk.Toplevel))
+            label = next(w for w in self.walk(window) if isinstance(w, tk.Label) and w.cget('image'))
+            image = ImageTk.getimage(label.image).convert('RGB')
+            scale = image.width/(bounds[2]-bounds[0])
+            def pixel(fraction):
+                x = self.app.overlay_x_mm+self.app.overlay_w_mm*fraction
+                y = self.app.overlay_y_mm+self.app.overlay_h_mm/2
+                return image.getpixel((int((x-bounds[0])*scale), int(image.height-(y-bounds[1])*scale)))
+            self.assertEqual(pixel(.25), background)
+            self.assertEqual(pixel(.75), ink)
+            next(w for w in self.walk(window) if isinstance(w, tk.Button)
+                 and w.cget('text') == 'Cerrar preview').invoke()
 
 
 if __name__ == '__main__':
